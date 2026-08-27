@@ -1567,6 +1567,29 @@ def scrolls(result: Result, width: int) -> bool:
     return len(result.title) > title_room(result, width)
 
 
+def viewport(cursor: int, top: int, listed: int, count: int) -> tuple[int, int]:
+    """Clamp *cursor* into the list and slide *top* until the cursor is on screen.
+
+    Extracted from the two listing screens that had it written out identically,
+    and then given a second job: a position **restored** from a previous visit
+    arrives with a ``top`` that may be nonsense — the list has grown under it,
+    or shrunk, or it was saved at a different terminal size. This is what makes
+    that safe. Handing back a cursor the screen does not draw would be worse
+    than forgetting the position, because every key would still work and
+    nothing would appear to move.
+
+    The window is held inside the list as well as around the cursor — the
+    ``count - listed`` term — which the two screens did not need while the
+    only thing moving ``top`` was the cursor one row at a time. A place
+    restored onto a list that has since shrunk reaches it immediately: without
+    it, a saved cursor of 90 landing in a list of 60 puts the last row alone
+    at the top of an otherwise empty screen.
+    """
+    cursor = max(0, min(cursor, count - 1))
+    top = max(min(top, cursor, max(0, count - listed)), cursor - listed + 1, 0)
+    return cursor, top
+
+
 def nights(size: int) -> int:
     """How many nightly windows a download this big needs, at the least.
 
@@ -1887,8 +1910,7 @@ def pick(
         _addstr(win, 1, 1, meta, curses.A_DIM)
 
         listed = max(1, height - 6)
-        cursor = max(0, min(cursor, len(options) - 1))
-        top = max(min(top, cursor), cursor - listed + 1, 0)
+        cursor, top = viewport(cursor, top, listed, len(options))
 
         for row in range(listed):
             index = top + row
@@ -2258,8 +2280,10 @@ def results(
     fetched: float | None = None,
     more: int | None = None,
     at_cap: bool = False,
-) -> int | str | None:
-    """A list of videos. An index, ``"/"`` or ``"r"``, or ``None`` to go back.
+    place: tuple[int, int] = (0, 0),
+) -> tuple[int | str | None, tuple[int, int]]:
+    """A list of videos, and where it was left. An index, ``"/"``, ``"r"`` or
+    ``"m"``, or ``None`` to go back — paired with the place to hand back in.
 
     Below :data:`WIDE` each result takes two lines, so ten of them are ten
     titles a thumb can read rather than twenty truncated columns. The cursor
@@ -2280,9 +2304,22 @@ def results(
     wakes up to do that while there is actually something scrolling, so a list
     of short titles still blocks on the keyboard and costs nothing at all,
     which is the property this loop was written for in the first place.
+
+    *place* is handed back with the answer rather than kept here, because
+    every way out of this screen comes back to it: queueing a video redraws
+    the list, and ``m`` and ``r`` fetch and redraw it. Starting at the top
+    each time turned "find three things to download in one search" — which is
+    what this screen is *for* — into three scrolls back to where you were, and
+    made ``m`` useless past the first page.
+
+    ``←`` and ``→`` jump a screenful, the same as page up and page down and
+    for the same reason those are here: with ``m`` the list runs to
+    :data:`SUBS_MAX`, and on a phone the page keys are two taps into an
+    extra-keys row that the arrows are already on. Neither pair is in the
+    hints — there is no room at 38 columns and less at 30 — so both are in
+    ``docs/ytq.md`` instead.
     """
-    top = 0
-    cursor = 0
+    cursor, top = place
     #: The scroll step for the cursor's title, and the cursor it belongs to.
     #: Reset on every move, so a title just arrived at starts from its
     #: beginning rather than half way through somebody else's lap.
@@ -2317,8 +2354,7 @@ def results(
         _addstr(win, 1, 1, fit(meta, width - 2), curses.A_DIM)
 
         listed = max(1, (height - 6) // tall)
-        cursor = max(0, min(cursor, len(hits) - 1))
-        top = max(min(top, cursor), cursor - listed + 1, 0)
+        cursor, top = viewport(cursor, top, listed, len(hits))
         if cursor != ticking_for:
             tick, ticking_for = 0, cursor
 
@@ -2378,37 +2414,44 @@ def results(
             # advances is the scroll.
             tick += 1
             continue
+        # Every way out of here carries the place with it, so that whatever
+        # brings the list back — a queued video, a deeper look, a re-read —
+        # brings it back where it was left.
+        here = (cursor, top)
         if key in (ord("q"), 27):
-            return None
+            return None, here
         if key == ord("/"):
-            return "/"
+            return "/", here
         # Live on the feed alone, and named in its hints. A key that is silent
         # on one list and does something on the other is the shape somebody
         # presses three times before concluding the tool is broken, so the
         # feed's own hint carries it and the search's does not.
         if feed and key == ord("r"):
-            return "r"
+            return "r", here
         # Guarded on there actually being more, so that at the bottom of the
         # feed this is a key that does nothing rather than one that buys the
         # same listing again — and the meta line above says which it is.
         if feed and more and key == ord("m"):
-            return "m"
+            return "m", here
         if key == ord("x"):
             running.stop()
         elif key in (curses.KEY_UP, ord("k")):
             cursor -= 1
         elif key in (curses.KEY_DOWN, ord("j")):
             cursor += 1
-        elif key == curses.KEY_NPAGE:
+        # The arrows alias the page keys rather than replacing them: `m` can
+        # make this list five times longer than it was, and on a phone the
+        # page keys are two taps into an extra-keys row the arrows sit on.
+        elif key in (curses.KEY_NPAGE, curses.KEY_RIGHT):
             cursor += listed
-        elif key == curses.KEY_PPAGE:
+        elif key in (curses.KEY_PPAGE, curses.KEY_LEFT):
             cursor -= listed
         elif key == curses.KEY_HOME:
             cursor = 0
         elif key == curses.KEY_END:
             cursor = len(hits) - 1
         elif key in (curses.KEY_ENTER, 10, 13):
-            return cursor
+            return cursor, here
 
 
 def watch(win, paint: dict, running: Running) -> None:
@@ -2490,6 +2533,11 @@ def app(
     #: When each cached listing was fetched, so the feed can say how old what
     #: is on screen is. Keyed the same as :data:`searched`.
     stamps: dict[str, float] = {}
+    #: And where each was left. Keyed the same again, so backing out of one
+    #: search into another and returning lands where you were in both — and so
+    #: that a listing never seen before starts at the top, which is the only
+    #: time starting at the top is right.
+    places: dict[str, tuple[int, int]] = {}
     probed: dict[str, tuple[dict, list[Choice], int]] = {}
     marks: dict[str, set[int]] = {}
     #: Videos this session has been told to queue again despite already having
@@ -2633,7 +2681,7 @@ def app(
             more, at_cap = (
                 next_page(len(hits), subs_asked) if feed else (None, False)
             )
-            picked = results(
+            picked, places[query] = results(
                 win,
                 query,
                 hits,
@@ -2644,6 +2692,7 @@ def app(
                 fetched=stamps.get(query),
                 more=more,
                 at_cap=at_cap,
+                place=places.get(query, (0, 0)),
             )
             if picked is None:
                 typed, screen = "", "entry"
@@ -3202,6 +3251,34 @@ def _self_test() -> int:
             f"and only {name} without -end offers m",
             "m " in hint(name, 40),
             not name.startswith("subs-end"),
+        )
+
+    # -- keeping your place -------------------------------------------------- #
+
+    # A place is saved on the way out and handed back on the way in, and what
+    # comes back may not fit any more: `m` grows the list under it, `r` can
+    # shrink it, and the terminal may have been resized in between. Every one
+    # of those has to land on a row the screen actually draws — a cursor off
+    # the end would leave every key working and nothing appearing to move.
+    check("a place that still fits is left alone", viewport(17, 12, 9, 60), (17, 12))
+    check("a cursor past the end comes back to the last row", viewport(90, 80, 9, 60), (59, 51))
+    check("and brings a full screen with it", viewport(90, 90, 9, 60), (59, 51))
+    check("an empty list does not go negative", viewport(4, 2, 9, 0), (0, 0))
+    check("nor does a list of one", viewport(7, 3, 9, 1), (0, 0))
+    # The top saved with it is a hint, not a fact: this is what stops a
+    # restored cursor being scrolled off the screen it was restored onto.
+    check("a stale top is slid down onto the cursor", viewport(40, 0, 9, 60), (40, 32))
+    check("and up onto it", viewport(3, 55, 9, 60), (3, 3))
+    check("a taller terminal shows more above the cursor", viewport(40, 0, 20, 60), (40, 21))
+    for cursor, top, listed, count in (
+        (17, 12, 9, 60), (90, 80, 9, 60), (0, 0, 1, 1), (40, 0, 9, 60), (3, 55, 9, 60),
+        (59, 0, 4, 60), (0, 40, 9, 60),
+    ):
+        landed, window = viewport(cursor, top, listed, count)
+        check(
+            f"the cursor is drawn from {cursor}/{top} at {listed}x{count}",
+            window <= landed < window + listed,
+            True,
         )
 
     # -- long titles scroll rather than being cut off ------------------------ #
