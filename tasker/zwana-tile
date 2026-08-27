@@ -1,0 +1,147 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# Four lines for a Tasker Quick Settings tile: label, subtitle, state, level.
+# Runs ON THE PHONE, called by the Termux:Tasker plugin. See docs/quota-tile.md.
+#
+#   zwana-tile              read the portal, fall back to the cache -- the tap,
+#                           and the profile
+#   zwana-tile cached       answer from disk without waiting, and start a
+#                           refresh in the background for the next call
+#   zwana-tile open         open the portal in a browser (the long press)
+#   zwana-tile --sep '|'    the same four fields on one line, joined by '|'
+#
+# Anything after those is passed to the widget, so a calibration run is
+# `zwana-tile cached --qs-width 8 12`.
+#
+# --sep exists because of one specific disappointment: Tasker's Variable Split
+# takes its splitter as a literal string, so `\n` in that field is a backslash
+# and an n, matches nothing, and leaves the whole answer sitting in %stdout1 --
+# a tile that says "1.68 GiB 95%, +762 MiB 05:30 active ok" and no error
+# anywhere. Handing Tasker a separator it cannot misread is cheaper than
+# arguing with the field. The join happens *after* the four-line check below,
+# never instead of it: one line is what Tasker wants, not what is checked.
+#
+# Two rules, both about a tile being a thing nobody watches fail:
+#
+#   * It always prints four lines. Tasker splits stdout by line and addresses
+#     the pieces by position, so three lines leave the *previous* run's label
+#     standing beside this run's subtitle -- a tile that is wrong and reads as
+#     current. Anything short is replaced wholesale by the unknown tile.
+#   * It always exits 0. The failure is on the face ("no reading"), where it can
+#     be seen; a non-zero exit would abort the Tasker task instead, leaving
+#     whatever the tile happened to say last time. %stderr still carries the
+#     detail for a task that wants it.
+#
+# The portal is the vessel's own captive portal, so none of this costs quota --
+# only the phone's radio is metered, and ic.zwana.io is not across it.
+set -u
+
+WIDGET="$(dirname "$(readlink -f "$0")")/../quota_widget.py"
+
+# A tile is drawn in the second between a swipe and a glance, so the read is
+# bounded rather than allowed to take the portal's own 30s per request three
+# times over. A read that runs out of time costs nothing to repeat -- it is the
+# free portal, not the radio -- so it falls back to the cache and tries again
+# at the next firing.
+DEADLINE=20
+CACHE_DEADLINE=5
+
+# What `cached` accepts without going to the portal. Short on purpose, and it
+# is not the "never wait" part -- the widget answers from disk either way and
+# starts a *detached* refresh when the reading is older than this, so the reply
+# is immediate and the next one is current.
+#
+# It used to be a year, which read as "whatever is on disk, however old" and
+# was exactly wrong: a tile wired to `cached` alone could then never update, no
+# matter how many times it was tapped, and would go on showing a figure with
+# nothing to say it had stopped moving.
+CACHE_MAX_AGE=45
+
+# The same four lines as the widget's own QS_UNKNOWN, spelled again here for
+# the case that one cannot answer at all -- no python, no checkout, no disk.
+# `inactive` and not Android's UNAVAILABLE: a greyed-out tile cannot be tapped,
+# and tapping is how a tile with no reading behind it gets one.
+UNKNOWN=$'quota ?\nno reading\ninactive\nunknown'
+
+mode=live
+sep=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        cached) mode=cached; shift ;;
+        live) mode=live; shift ;;
+        open) mode=open; shift ;;
+        --sep) sep="${2:-}"; shift 2 ;;
+        *) break ;;
+    esac
+done
+
+# `open` is not a tile answer and does not obey the four-line rule: it opens the
+# portal in a browser and says which address it opened. The address is asked of
+# zwana_quota rather than written here, so this repo spells ic.zwana.io once --
+# and it is derived from the URL the client actually talks to, which is the copy
+# that gets tested every time anything reads the quota.
+if [ "$mode" = open ]; then
+    url="$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import zwana_quota; print(zwana_quota.PORTAL_URL)' "$(dirname "$WIDGET")")" || exit 1
+    if command -v termux-open-url >/dev/null 2>&1; then
+        termux-open-url "$url"
+    elif command -v am >/dev/null 2>&1; then
+        am start -a android.intent.action.VIEW -d "$url" >/dev/null
+    else
+        printf 'zwana-tile: no termux-open-url and no am; install termux-api\n' >&2
+        printf '%s\n' "$url"
+        exit 1
+    fi
+    printf '%s\n' "$url"
+    exit 0
+fi
+
+cached_read() { timeout "$CACHE_DEADLINE" python3 "$WIDGET" --qs --max-age "$CACHE_MAX_AGE" "$@"; }
+live_read() { timeout "$DEADLINE" python3 "$WIDGET" --qs --refresh "$@"; }
+
+# Four lines, of which the label, the state and the level must say something.
+# The subtitle is the one that may be blank, because the smallest tile size has
+# nowhere to draw it -- see QS_SIZES in quota_widget.py. Everything else blank
+# is a torn answer, and gets the unknown tile instead.
+four_lines() {
+    local -a field
+    mapfile -t field <<<"$1"
+    [ "${#field[@]}" -eq 4 ] || return 1
+    local i
+    for i in 0 2 3; do
+        case "${field[$i]}" in
+            *[![:space:]]*) ;;
+            *) return 1 ;;
+        esac
+    done
+    return 0
+}
+
+if [ "$mode" = cached ]; then
+    out="$(cached_read "$@")"
+else
+    out="$(live_read "$@")"
+    four_lines "$out" || out="$(cached_read "$@")"
+fi
+
+four_lines "$out" || out="$UNKNOWN"
+
+# One character only: `tr` maps characters, and a longer separator would map
+# each newline to its first character rather than failing. A separator that
+# appears in the text would be worse than none, so it is checked -- the fields
+# are digits, a unit, a percentage and a clock, and nothing here should be
+# tempted to split on a colon or a space.
+if [ -n "$sep" ]; then
+    if [ "${#sep}" -ne 1 ]; then
+        printf 'zwana-tile: --sep takes one character, not %s\n' "$sep" >&2
+    elif printf '%s' "$out" | grep -qF "$sep"; then
+        printf 'zwana-tile: --sep %s appears in the reading itself\n' "$sep" >&2
+    else
+        # A blank subtitle becomes a space rather than an empty field. Splitters
+        # differ on whether they keep an empty element, and one that drops it
+        # slides the state and the level up a place -- a tile labelled with its
+        # own state, which reads as a tile rather than as a fault.
+        out="$(printf '%s' "$out" | sed 's/^[[:space:]]*$/ /' | tr '\n' "$sep")"
+    fi
+fi
+
+printf '%s\n' "$out"
+exit 0
