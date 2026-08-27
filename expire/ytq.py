@@ -868,6 +868,102 @@ class Choice:
         return int(math.ceil(self.size * factor)) + OVERHEAD_FIXED
 
 
+#: Extractors this can say anything useful about. The claim :func:`withheld`
+#: makes is specific to YouTube — it always has adaptive streams, so their
+#: total absence is evidence — and it is simply false of the many sites that
+#: legitimately serve one progressive file. Named rather than assumed, so a
+#: plain .mp4 URL is never accused of a bot check.
+ADAPTIVE_ALWAYS = ("youtube",)
+
+
+def withheld(info: dict) -> bool:
+    """Whether YouTube answered with a fraction of the formats it really has.
+
+    The signature of a failed bot check: with no PO token the adaptive streams
+    are never sent, and what comes back is the legacy progressive format and
+    the storyboards. A YouTube video always has adaptive streams, so none at
+    all is not a video that only exists in 360p — it is an extraction that was
+    refused politely.
+
+    Read off the raw formats and deliberately **not** off :func:`choices`,
+    which drops what it cannot size. Those are the two ways to end up looking
+    at a single 360p row and they have completely different fixes, so the one
+    thing this must not do is conflate them: `choices` reports the second as
+    its ``unsized`` count and this reports the first.
+    """
+    who = str(info.get("extractor_key") or info.get("extractor") or "").lower()
+    if not any(name in who for name in ADAPTIVE_ALWAYS):
+        return False
+    adaptive = playable = 0
+    for fmt in info.get("formats") or []:
+        vcodec, acodec = fmt.get("vcodec"), fmt.get("acodec")
+        if vcodec == "none" and acodec == "none":
+            continue  # storyboards, which arrive either way
+        playable += 1
+        # Exactly one side absent is an adaptive stream; neither absent is the
+        # progressive one that survives a refusal.
+        if (vcodec == "none") != (acodec == "none"):
+            adaptive += 1
+    return playable > 0 and adaptive == 0
+
+
+def withheld_note(width: int) -> str:
+    """The one line the format list carries while the answer is a refusal.
+
+    Three widths, measured like the hints are, because the first version was
+    one string of 39 columns drawn into 38 and a phone rendered "youtube
+    withheld the res" — a warning clipped mid-word, on a screen whose whole
+    job at that moment is to be believed.
+
+    No symbol in front of it. ``⚠`` is ambiguous-width and routinely rendered
+    as a double-width emoji, which would put the clip back; and this repo's
+    own rule is that the status is the word, never the decoration. Bold and
+    cost-red where there is colour, and the words "bot check" where there is
+    not.
+    """
+    if width >= WIDE:
+        return (
+            "the bot check withheld the other formats — "
+            "this is not all this video has"
+        )
+    return "bot check — not all the formats" if width >= TIGHT else (
+        "bot check: formats withheld"
+    )
+
+
+def withheld_advice(detail: str) -> list[str]:
+    """What a thin answer means, and the two things that fix it.
+
+    Both halves every time, because they fail identically and having one
+    without the other looks exactly like having neither: no runtime and the
+    js challenge goes unsolved, no cookies and the watch page is rate-limited
+    into answering without visitor data. Either way the formats are withheld
+    and nothing raises.
+
+    The check is ``yt-dlp -v`` rather than a description of where things
+    ought to be installed, because it answers both halves itself in two of its
+    own lines, with no URL and no network — and it answers for *whichever*
+    yt-dlp actually runs. That is the question somebody with a tool venv, a
+    pkg install and a pip install on one phone cannot otherwise settle, and it
+    is exactly where the solver ends up installed into the wrong python.
+
+    Bare rather than piped through ``grep``: the pipeline that greps for both
+    lines is 48 characters and this screen wraps at 36, and a command broken
+    across two lines is a command retyped wrong. The two line names are given
+    instead, which is the same information and survives the fold.
+    """
+    return [
+        "youtube sent one format, not all of them",
+        "no PO token, so only the legacy 360p stream came back — not a video "
+        "that only exists in 360p.",
+        detail,
+        "run yt-dlp -v — no url, no data — and read two of its lines:",
+        "JS runtimes: must name one, not none. Optional libraries: must list "
+        "yt_dlp_ejs.",
+        "both, or it stays refused. docs: ~/or3/docs/ytq.md",
+    ]
+
+
 def _size_of(fmt: dict) -> tuple[int, bool]:
     """``(bytes, exact)``. Zero means yt-dlp would not say."""
     size = fmt.get("filesize")
@@ -1893,7 +1989,7 @@ def pick(
             curses.A_REVERSE | curses.A_BOLD | paint.get("head", 0),
         )
         length = f"{int(duration) // 60}m{int(duration) % 60:02d}s" if duration else "?"
-        meta = f"{length}  ·  {len(options)} formats"
+        meta = f"{length}  ·  {len(options)} format{'' if len(options) == 1 else 's'}"
         if not narrow:
             meta = f"{info.get('extractor_key', '?')}  ·  {meta}"
         if unsized:
@@ -1907,7 +2003,19 @@ def pick(
         # so twice is what makes a 40-column screen feel busy.
         if recalled and not narrow:
             meta += "  ·  last used"
-        _addstr(win, 1, 1, meta, curses.A_DIM)
+        _addstr(win, 1, 1, fit(meta, width - 2), curses.A_DIM)
+        # Its own line and not another `·` clause on the meta, because it is
+        # not a detail about this list — it is the reason the list is wrong.
+        # Bold and cost-red where there is colour, and saying it in words
+        # where there is not, on the rule the size column already follows.
+        if withheld(info):
+            _addstr(
+                win,
+                2,
+                1,
+                fit(withheld_note(width), width - 2),
+                curses.A_BOLD | paint.get("nights", 0),
+            )
 
         listed = max(1, height - 6)
         cursor, top = viewport(cursor, top, listed, len(options))
@@ -2543,6 +2651,11 @@ def app(
     #: Videos this session has been told to queue again despite already having
     #: them. Per target, so agreeing to one is not agreeing to the next.
     agreed: set[str] = set()
+    #: Whether the bot check has already been explained. Once a session and
+    #: not once per video: the fix is a config edit that cannot be made from
+    #: here, so saying it again on the next video is a keypress charged for
+    #: nothing. The format screen goes on marking every list it applies to.
+    warned = False
 
     typed = first or ""
     query = ""
@@ -2727,6 +2840,12 @@ def app(
                     return receipts
                 probed[target] = (info, *choices(info))
             info, options, unsized = probed[target]
+            # Before the list rather than after a choice has been made from
+            # it, because the whole trouble with a withheld extraction is that
+            # what comes back looks exactly like an answer.
+            if withheld(info) and not warned:
+                message(win, withheld_advice(cookie_state()[1]))
+                warned = True
             if not options:
                 message(
                     win,
@@ -2942,6 +3061,12 @@ def list_formats(url: str, dump: str | None = None) -> int:
     if width >= WIDE:
         title += f"  [{info.get('extractor_key')}]"
     print(title[:width])
+    # The same verdict the format screen shows, for the path with no screen.
+    # On stderr so that a pipe reading the table is not handed a row that is
+    # not one, and so it survives being redirected away from.
+    if withheld(info):
+        for line in withheld_advice(cookie_state()[1]):
+            print(f"  {line}", file=sys.stderr)
     for option in options:
         line = format_row(option, width)
         if width >= WIDE:
@@ -3154,6 +3279,95 @@ def _self_test() -> int:
             "q " in tight or "esc " in tight,
             True,
         )
+
+    # -- a withheld extraction is not a 360p video --------------------------- #
+
+    # The two ways to end up looking at one 360p row, which have nothing in
+    # common but the symptom: youtube refused and sent the legacy stream, or
+    # yt-dlp described every format and put a size on none of them. Telling
+    # them apart is the whole job here — `withheld` reports the first and
+    # `choices`'s unsized count reports the second, and neither may answer for
+    # the other.
+    refused = {
+        "title": "X", "extractor_key": "Youtube",
+        "formats": [
+            {"format_id": "sb0", "ext": "mhtml", "vcodec": "none", "acodec": "none"},
+            {"format_id": "18", "ext": "mp4", "vcodec": "avc1.42", "acodec": "mp4a.40",
+             "height": 360, "filesize": 40_000_000},
+        ],
+    }
+    sizeless = {
+        "title": "X", "extractor_key": "Youtube",
+        "formats": [
+            {"format_id": "137", "ext": "mp4", "vcodec": "avc1", "acodec": "none",
+             "height": 1080},
+            {"format_id": "140", "ext": "m4a", "vcodec": "none", "acodec": "mp4a"},
+            {"format_id": "18", "ext": "mp4", "vcodec": "avc1", "acodec": "mp4a",
+             "height": 360, "filesize": 40_000_000},
+        ],
+    }
+    check("a refused extraction is recognised", withheld(refused), True)
+    check("and shows the one row it was sent", len(choices(refused)[0]), 1)
+    check("with nothing hidden to explain it", choices(refused)[1], 0)
+    check("formats with no size are NOT a refusal", withheld(sizeless), False)
+    check("they are the hidden count instead", choices(sizeless)[1], 2)
+    # Both land on a single 360p row, which is why the symptom cannot be the
+    # thing that decides.
+    check("both look the same on screen", len(choices(sizeless)[0]), 1)
+
+    # A site that only ever serves one progressive file is not being refused,
+    # and accusing it of a bot check would send somebody to edit a config over
+    # a video that is working perfectly.
+    for who in ("generic", "Vimeo", "TwitterBroadcast", ""):
+        other = dict(refused, extractor_key=who)
+        check(f"{who or 'an unnamed extractor'} is not accused", withheld(other), False)
+    check(
+        "a youtube answer with adaptive streams is fine",
+        withheld({"extractor_key": "Youtube", "formats": [
+            {"format_id": "137", "vcodec": "avc1", "acodec": "none", "ext": "mp4",
+             "filesize": 1},
+            {"format_id": "18", "vcodec": "avc1", "acodec": "mp4a", "ext": "mp4",
+             "filesize": 1}]}),
+        False,
+    )
+    check("and one with no formats at all is not accused either",
+          withheld({"extractor_key": "Youtube", "formats": []}), False)
+    check("nor is one holding only storyboards",
+          withheld({"extractor_key": "Youtube", "formats": [
+              {"format_id": "sb0", "ext": "mhtml", "vcodec": "none",
+               "acodec": "none"}]}), False)
+
+    # Measured at the same three widths the hints are, and for the same
+    # reason: this one was 39 columns drawn into 38, and a phone showed
+    # "youtube withheld the res".
+    for span, room in ((80, 78), (40, HINT_WIDTH), (32, TIGHT_WIDTH)):
+        line = withheld_note(span)
+        at_most(f"the bot-check line fits {span}", len(line), room)
+        check(f"and still says what it is at {span}", "bot check" in line, True)
+    # No symbol in front of it: `⚠` is ambiguous-width and often drawn as a
+    # double-width emoji, which is the clip again.
+    check(
+        "the bot-check line is plain words",
+        any(ord(ch) > 0x2500 for ch in withheld_note(40)),
+        False,
+    )
+
+    # The notice has to fit the phone whole, like every other one here: it is
+    # the only place the fix is written down at the moment it is needed.
+    advice = withheld_advice(f"{COOKIE_SUGGESTION}, written 23 days ago")
+    body = message_body(advice, 40 - 4, 24 - 4)
+    check("the bot-check notice fits a phone whole", len(body),
+          len(message_body(advice, 40 - 4, 999)))
+    for row in body:
+        at_most("and every line of it fits", len(row), 40 - 4)
+    # It names a command, and a command broken across two lines is one that
+    # gets retyped wrong — the same rule the paths follow.
+    # A command broken across two lines is a command retyped wrong, which is
+    # why this one is bare rather than piped through grep.
+    check("the check command survives whole",
+          any("yt-dlp -v" in row for row in body), True)
+    check("it says both halves are needed",
+          any("both" in row for row in body), True)
 
     # -- searching ---------------------------------------------------------- #
 
