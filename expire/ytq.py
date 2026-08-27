@@ -17,12 +17,25 @@ with a title, a channel, a length and an approximate age per result; picking one
 probes it exactly as a pasted URL would. The entry field takes either, and tells
 them apart by looking, so there is one box rather than two.
 
+And it browses the subscription feed, which is the same list of the same things
+and so is the same screen: ``subs`` in that one field asks YouTube for the
+newest ``SUBS_RESULTS`` videos from the accounts you follow, bounded to one page
+(~0.2 MB), marked with what the queue already holds, and picked from exactly as
+a search result is. It is the one thing here that needs the *stored cookie* —
+the jar the yt-dlp config already points at for the bot check — so whether there
+is one is asked before a request is spent rather than after one comes back
+empty. An empty feed is never reported as "nothing new": YouTube answers a
+logged-out feed with no entries rather than with an error, so that answer means
+the cookies have expired and the screen says so.
+
 Usage::
 
     ytq                      # search, or paste a URL into the same field
     ytq crust of rust        # straight to the results
+    ytq subs                 # straight to the subscription feed
     ytq <url>                # straight to the format list
     ytq --list <url>         # print the formats, write nothing
+    ytq --list --subs        # print the feed, write nothing
     ytq --now <url>          # open the format list ready to download now
 
 The item it writes runs yt-dlp per firing (see :mod:`ytdl_item`); it never
@@ -51,6 +64,7 @@ import json
 import math
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -160,6 +174,11 @@ HINTS = {
     # going: the key that stops it is worth more room than the key that starts
     # another search, and both do not fit.
     "running": "x stop  ↑↓ pick  ⏎ quality  q back",
+    # The feed's own pair. What changes is the middle key: a search is re-run
+    # by retyping it, so `/` earns its place there; the feed has nothing to
+    # retype and what it needs instead is a way to read it again.
+    "subs": "↑↓ pick  ⏎ quality  r fresh  q back",
+    "subs-running": "x stop  ↑↓ pick  ⏎ quality  q back",
     "pick": "↑↓ pick  ⏎ queue  n now  q back  ~ est",
     "pick-now": "↑↓ pick  ⏎ now PAID  t queue  q back",
     "queue": "⏎ queue  e edit  n now  q back",
@@ -177,6 +196,8 @@ TIGHT_HINTS = {
     "entry": "⏎ go  esc quit",
     "results": "↑↓  ⏎ formats  / new  q back",
     "running": "x stop  ↑↓  ⏎ formats  q back",
+    "subs": "↑↓  ⏎ formats  r fresh  q back",
+    "subs-running": "x stop  ↑↓  ⏎ formats  q back",
     "pick": "↑↓  ⏎ queue  n now  q back",
     "pick-now": "↑↓  ⏎ now PAID  q back",
     "queue": "⏎ queue  e edit  n now  q back",
@@ -201,6 +222,30 @@ SEARCH_RESULTS = 20
 #: approximate by construction, which is why :func:`age` always marks it.
 APPROX_DATE_ARGS = ("--extractor-args", "youtubetab:approximate_date")
 
+#: The subscription feed, as yt-dlp addresses it. A signed-in page: without
+#: cookies YouTube answers it with nothing at all, which is why
+#: :func:`cookie_state` is asked *before* a request is spent rather than after
+#: one comes back empty.
+SUBS_URL = "https://www.youtube.com/feed/subscriptions"
+
+#: How much of the feed one look asks for. YouTube serves the feed a page at a
+#: time and yt-dlp will follow every continuation it is offered, so this is a
+#: bound and not a preference — see :func:`subs_argv`.
+SUBS_RESULTS = 30
+
+#: What the feed is called in the caches the session keeps, where a search is
+#: keyed on the words that produced it. Not a query anybody can type, so it
+#: cannot collide with one.
+SUBS_KEY = ":subs"
+
+#: Where the docs tell you to put the cookie jar, and the config that points at
+#: it. Named here so that the screen saying the feed cannot be read sends
+#: somebody to the same two files ``docs/ytq.md`` does; a screen that named a
+#: different one of yt-dlp's several config paths would be sending them to a
+#: file that works and that nobody else has ever edited.
+COOKIE_SUGGESTION = "~/.config/yt-dlp/cookies.txt"
+CONFIG_SUGGESTION = "~/.config/yt-dlp/config"
+
 #: The free grant is ~763 MiB a day and the runner keeps 100 MB of it back, so
 #: this is roughly what one night can spend. Used only to colour the size
 #: column — green fits comfortably in a night, amber is most of one, red will
@@ -218,16 +263,14 @@ class ProbeError(RuntimeError):
     """yt-dlp could not describe the URL."""
 
 
-def probe(url: str, timeout: int = 180) -> dict:
-    """Metadata only — ``-J`` downloads no media."""
-    argv = [
-        *ytdl_item.ytdl_argv(),
-        "-J",
-        "--no-playlist",
-        "--no-colors",
-        "--no-warnings",
-        url,
-    ]
+def ask(argv: list[str], timeout: int) -> dict:
+    """Run a metadata-only yt-dlp and hand back the object it printed.
+
+    One door, because the three things that ask — a probe, a search and the
+    subscription feed — differ only in the argv they hand in, and every one of
+    them fails in exactly the same four ways. Written out three times it was
+    three places for "yt-dlp is not installed" to drift apart in.
+    """
     try:
         done = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
     except FileNotFoundError:
@@ -241,6 +284,24 @@ def probe(url: str, timeout: int = 180) -> dict:
         info = json.loads(done.stdout)
     except ValueError:
         raise ProbeError("yt-dlp returned something that is not JSON")
+    if not isinstance(info, dict):
+        raise ProbeError("yt-dlp returned something that is not a metadata object")
+    return info
+
+
+def probe(url: str, timeout: int = 180) -> dict:
+    """Metadata only — ``-J`` downloads no media."""
+    info = ask(
+        [
+            *ytdl_item.ytdl_argv(),
+            "-J",
+            "--no-playlist",
+            "--no-colors",
+            "--no-warnings",
+            url,
+        ],
+        timeout,
+    )
     if info.get("_type") == "playlist":
         raise ProbeError("that URL is a playlist; queue one video at a time")
     return info
@@ -353,24 +414,285 @@ def entries(info: dict) -> list[Result]:
 
 def search(query: str, count: int = SEARCH_RESULTS, timeout: int = 120) -> list[Result]:
     """Ask yt-dlp for *count* results. One request, no media, no per-video work."""
+    return entries(ask(search_argv(query, count), timeout))
+
+
+# --------------------------------------------------------------------------- #
+# The subscription feed
+# --------------------------------------------------------------------------- #
+#
+# The feed is the one screen here that cannot work on its own. A search and a
+# probe are anonymous requests; the feed is a signed-in page, and what signs it
+# in is the cookie jar the yt-dlp config already names for the bot check
+# (docs/ytq.md, "Sign in to confirm you're not a bot"). So this half is mostly
+# about that jar: finding out whether there is one *before* a request is spent,
+# and never letting a logged-out answer be read as good news.
+
+
+def tilde(path: Path | str) -> str:
+    """A path with ``$HOME`` written as ``~`` — shorter, and how it is typed."""
     try:
-        done = subprocess.run(
-            search_argv(query, count), capture_output=True, text=True, timeout=timeout
-        )
-    except FileNotFoundError:
-        raise ProbeError("yt-dlp is not installed (pip install yt-dlp)")
-    except subprocess.TimeoutExpired:
-        raise ProbeError(f"yt-dlp did not answer within {timeout}s")
-    if done.returncode != 0:
-        tail = (done.stderr or done.stdout or "").strip().splitlines()
-        raise ProbeError(tail[-1] if tail else f"yt-dlp exited {done.returncode}")
-    try:
-        info = json.loads(done.stdout)
+        return "~/" + str(Path(path).relative_to(Path.home()))
     except ValueError:
-        raise ProbeError("yt-dlp returned something that is not JSON")
-    if not isinstance(info, dict):
-        raise ProbeError("yt-dlp returned something that is not a search answer")
-    return entries(info)
+        return str(path)
+
+
+def config_paths() -> list[Path]:
+    """The files yt-dlp reads its user config from, in its own order.
+
+    Read rather than assumed, because the ``--cookies`` line is somebody's
+    hand edit and the whole point of looking is to name the file it is missing
+    from. Deliberately not exhaustive of yt-dlp's search (there is a portable
+    config and a per-directory one) — those are not shapes this phone has, and
+    a path listed here that nobody uses would be a path named in an error
+    message that sends somebody to the wrong file.
+    """
+    home = Path.home()
+    xdg = Path(os.environ.get("XDG_CONFIG_HOME") or (home / ".config"))
+    return [
+        xdg / "yt-dlp.conf",
+        xdg / "yt-dlp" / "config",
+        xdg / "yt-dlp" / "config.txt",
+        home / "yt-dlp.conf",
+        home / ".yt-dlp" / "config",
+    ]
+
+
+#: The two ways a config can say where the signed-in session comes from. Both
+#: count: ``--cookies-from-browser`` is not a file this can stat, but it is a
+#: declaration, and a tool that refused it would be refusing a working setup.
+COOKIE_FLAGS = ("--cookies", "--cookies-from-browser")
+
+
+def declared_cookies(paths: list[Path] | None = None) -> tuple[str, str, Path] | None:
+    """``(flag, value, the config that said so)`` for the first one found.
+
+    Parsed with :mod:`shlex` per line the way yt-dlp parses these files, so a
+    quoted path with a space in it reads the same here as it does there, and a
+    ``#`` comment holding the word ``--cookies`` is a comment in both. Reading
+    it any more loosely would mean this screen and yt-dlp disagreeing about
+    whether cookies are configured, which is a worse answer than not looking.
+    """
+    for path in config_paths() if paths is None else paths:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            try:
+                tokens = shlex.split(line, comments=True)
+            except ValueError:
+                continue
+            for index, token in enumerate(tokens):
+                flag, _, inline = token.partition("=")
+                if flag not in COOKIE_FLAGS:
+                    continue
+                value = inline or (
+                    tokens[index + 1] if index + 1 < len(tokens) else ""
+                )
+                if value:
+                    return flag, value, path
+    return None
+
+
+def written(mtime: float, now: float | None = None) -> str:
+    """How long ago a file was last written, in words.
+
+    Cookies expire, and every symptom of that looks like something else — a
+    short feed, an empty one, a video that lists one 320p format. This is the
+    fact that turns "the feed is empty" into "the cookies are three weeks old",
+    which is the sentence somebody can act on.
+    """
+    days = int(max(0.0, (time.time() if now is None else now) - mtime) // 86400)
+    if days < 1:
+        return "today"
+    if days == 1:
+        return "yesterday"
+    return f"{days} days ago"
+
+
+def cookie_state(paths: list[Path] | None = None) -> tuple[str, str]:
+    """``(state, what to say about it)``: can the feed be asked for at all?
+
+    ``file`` and ``browser`` are a go; ``missing`` and ``none`` are not. Asked
+    *before* the request, on the same rule as :func:`already_queued`: a feed
+    request with no session behind it is not a small failure, it is a whole
+    page of YouTube bought in order to be told to sign in — and then answered
+    with an empty list rather than an error, so the money buys no explanation
+    either.
+
+    The detail is a phrase and not a sentence, because both callers put it in
+    the middle of one.
+    """
+    declared = declared_cookies(paths)
+    if declared is None:
+        looked = [
+            path for path in (config_paths() if paths is None else paths)
+            if path.is_file()
+        ]
+        if looked:
+            return "none", "no --cookies line in " + ", ".join(
+                tilde(path) for path in looked
+            )
+        # Named from the constant rather than by indexing the list: the list
+        # is where yt-dlp looks and this is where the docs say to write, and
+        # only one of those is a sentence to put in front of somebody.
+        return "none", f"there is no yt-dlp config at {CONFIG_SUGGESTION}"
+    flag, value, config = declared
+    if flag == "--cookies-from-browser":
+        return "browser", f"--cookies-from-browser {value}, from {tilde(config)}"
+    jar = Path(value).expanduser()
+    try:
+        stat = jar.stat()
+    except OSError:
+        return "missing", f"{tilde(jar)} is named by {tilde(config)} but is not there"
+    if stat.st_size == 0:
+        return "missing", f"{tilde(jar)} is empty"
+    return "file", f"{tilde(jar)}, written {written(stat.st_mtime)}"
+
+
+#: Why the feed alone needs anything. Its own entry rather than part of
+#: :func:`cookie_fix`, because the two screens that do not need it each say it
+#: better in their own words — the refusal has yt-dlp's line and the empty feed
+#: has a paragraph about what an empty feed is — and a notice has to fit a
+#: phone whole, which is checked.
+COOKIE_WHY = "the feed is a signed-in page — no cookies, no answer."
+
+
+def cookie_fix(detail: str) -> list[str]:
+    """What was found, and how to renew it.
+
+    One spelling, appended to every screen that cannot read the feed — a
+    refusal, an absent jar and an empty answer are three symptoms with one
+    remedy, and three wordings of it would be three chances for two of them to
+    go stale.
+
+    Short because it has to fit a phone whole: a fix the screen had to
+    truncate is not a fix. The mode and the "never in the repo" stay in it at
+    that price — the jar holds live google session tokens, and yt-dlp rewrites
+    it in place as they refresh.
+    """
+    return [
+        detail,
+        f"export cookies.txt from the browser, netscape format, mode 600 and "
+        f"never in the repo: {COOKIE_SUGGESTION}, named by --cookies in "
+        f"{CONFIG_SUGGESTION}.",
+        "docs: ~/or3/docs/ytq.md",
+    ]
+
+
+def cookie_advice(state: str, detail: str) -> list[str]:
+    """Why the feed cannot be read, and the one thing that fixes it.
+
+    A screen rather than a line, and the fix written on it, for the reason
+    :func:`duplicate_screen` gives: this is a dead end, and a dead end that
+    does not say the way out is one somebody concludes is a broken tool.
+    """
+    return [
+        {
+            "none": "no cookies are configured",
+            "missing": "the cookie jar is not there",
+        }.get(state, "the subscription feed cannot be read"),
+        COOKIE_WHY,
+        *cookie_fix(detail),
+    ]
+
+
+def empty_feed_advice(detail: str) -> list[str]:
+    """What an empty feed means, which is never "nothing new".
+
+    YouTube answers a logged-out feed with an empty tab rather than with an
+    error, so the honest-looking reading of that answer — you are up to date —
+    is the one reading it cannot have. Saying it would hide the only fix there
+    is behind a screen that looks like good news, on a tool somebody opens
+    once a day.
+    """
+    return [
+        "the feed came back empty",
+        "a signed-out session, not an empty subscription list: youtube "
+        "answers a logged-out feed with no entries rather than an error, so "
+        "this is what expired cookies look like.",
+        *cookie_fix(detail),
+    ]
+
+
+def subs_argv(count: int = SUBS_RESULTS) -> list[str]:
+    """The command one look at the feed runs, kept separate so it can be checked.
+
+    ``--playlist-end`` is the whole cost argument, and it is the same shape of
+    trap :func:`search_argv` documents: without it this works perfectly and
+    follows every continuation YouTube will serve, which for a few years of
+    subscriptions is hundreds of pages on a metered radio. Bounded, yt-dlp
+    stops pulling once it has *count*, so one look is one request.
+
+    ``--flat-playlist`` is the other half: the feed is a list of videos and
+    extracting each one is what the format screen is for, later, on the one
+    that gets picked.
+
+    Nothing here disables the user config, and here that is not a nicety — the
+    ``--cookies`` line in it is the only reason this page answers at all.
+    """
+    return [
+        *ytdl_item.ytdl_argv(),
+        SUBS_URL,
+        "--flat-playlist",
+        "--playlist-end",
+        str(count),
+        "-J",
+        "--no-colors",
+        "--no-warnings",
+        *APPROX_DATE_ARGS,
+    ]
+
+
+def subscriptions(count: int = SUBS_RESULTS, timeout: int = 180) -> list[Result]:
+    """The newest *count* videos from the subscription feed, newest first.
+
+    Longer than a search's timeout because the tab page is bigger and the
+    connection is the vessel's, not a datacentre's.
+    """
+    return entries(ask(subs_argv(count), timeout))
+
+
+#: The words the one entry field takes for the feed. ``:ytsubs`` is yt-dlp's
+#: own spelling and is here so that what somebody already knows works.
+FEED_WORDS = ("subs", ":subs", "subscriptions", ":subscriptions", ":ytsubs")
+
+
+def looks_like_feed(text: str) -> bool:
+    """Whether the entry field is being asked for the subscription feed.
+
+    A third answer out of the same box, on :func:`looks_like_url`'s rule: the
+    alternative on a phone is a mode key to remember, and the field is already
+    telling two things apart by looking. ``subs`` is read as the feed rather
+    than as words to search for, which is a guess — and the cheap one, since
+    being wrong costs one press of ``/`` and being wrong the other way costs a
+    search nobody wanted.
+
+    Asked *before* :func:`looks_like_url`, because the feed's own URL is a URL
+    too and probing it gets the playlist refusal instead of the feed.
+    """
+    text = text.strip().lower()
+    return text in FEED_WORDS or "/feed/subscriptions" in text
+
+
+def freshness(fetched: float | None, now: float | None = None) -> str:
+    """How old the listing on screen is, or ``""`` when it was never fetched.
+
+    Said for the feed and not for a search. A search is a question you re-ask
+    by retyping it; a feed is a thing that changes under you, and it is cached
+    for the session precisely so that backing out of a video costs nothing —
+    which means the screen has to say how old what it is showing is, or the
+    cache is just a quiet lie about the time.
+    """
+    if not fetched:
+        return ""
+    seconds = max(0.0, (time.time() if now is None else now) - fetched)
+    if seconds < 90:
+        return "just now"
+    if seconds < 5400:
+        return f"{int(seconds // 60)}m ago"
+    return f"{int(seconds // 3600)}h ago"
 
 
 def age(timestamp: int | None, now: float | None = None) -> str:
@@ -1060,6 +1382,22 @@ def fit(text: str, width: int) -> str:
     return text if len(text) <= width else text[: max(1, width - 1)] + "…"
 
 
+def wrapped(text: str, width: int) -> list[str]:
+    """*text* broken to *width*, but never inside a word.
+
+    ``break_on_hyphens`` off, which is the whole reason this is a function.
+    What these screens wrap ends in a path, a flag or a file stem —
+    ``~/.config/yt-dlp/cookies.txt``, ``--cookies``,
+    ``10-crust-of-rust-subtyping`` — and the default splits all three at a
+    hyphen. A name wrapped mid-word is a name somebody retypes wrong, on the
+    screens whose entire job is telling them what to type.
+
+    Everything here that wraps prose goes through it, which is also what stops
+    the name being shadowed by the three loop variables it replaced.
+    """
+    return textwrap.wrap(text, width, break_on_hyphens=False) or [""]
+
+
 def nights(size: int) -> int:
     """How many nightly windows a download this big needs, at the least.
 
@@ -1518,8 +1856,8 @@ def confirm(
                 "starts on enter and runs in the background; dlqd list "
                 "shows it, x stops it"
             )
-            for offset, wrapped in enumerate(textwrap.wrap(note, max(20, width - 4))):
-                _addstr(win, 13 + offset, 2, wrapped, curses.A_DIM)
+            for offset, piece in enumerate(wrapped(note, max(20, width - 4))):
+                _addstr(win, 13 + offset, 2, piece, curses.A_DIM)
         _addstr(
             win,
             height - 2,
@@ -1620,25 +1958,52 @@ def duplicate_screen(win, paint: dict, dup: Duplicate) -> bool:
     )
     row = 2
     for text in (dup.says(), f"as {dup.stem}"):
-        for wrapped in textwrap.wrap(text, max(12, width - 4)) or [""]:
-            _addstr(win, row, 2, wrapped, curses.A_BOLD if row == 2 else 0)
+        # Through `wrapped`, not textwrap: the second of these is `as
+        # 10-crust-of-rust-subtyping`, and the default breaks it at a hyphen.
+        for piece in wrapped(text, max(12, width - 4)):
+            _addstr(win, row, 2, piece, curses.A_BOLD if row == 2 else 0)
             row += 1
     row += 1
     if dup.how == "name":
         # Weaker evidence, said as such: the id is what proves two items are
         # the same video, and an item queued before SOURCE existed has none.
-        for wrapped in textwrap.wrap(
+        for piece in wrapped(
             "matched by name, not by id — it may be a different video with "
             "the same title",
             max(12, width - 4),
         ):
-            _addstr(win, row, 2, wrapped, curses.A_DIM)
+            _addstr(win, row, 2, piece, curses.A_DIM)
             row += 1
         row += 1
     _addstr(win, min(row, height - 4), 2, "a  queue it again anyway")
     _addstr(win, height - 2, 1, "a  again   any other key: back", curses.A_DIM)
     win.refresh()
     return win.getch() == ord("a")
+
+
+def message_body(lines: list[str], width: int, rows: int) -> list[str]:
+    """*lines* wrapped and blank-separated, bounded to *rows* of them.
+
+    Pure, so the one thing that must never happen on this screen can be
+    checked without a terminal. :func:`message` draws its own way out under
+    the body; a body allowed to run past the bottom takes that line with it
+    and leaves a full-screen notice with no visible key to leave it — which is
+    the same failure as a hint clipped at the floor, arrived at from the other
+    direction, and it turned up here the moment a notice grew long enough to
+    matter.
+
+    Overflow is said and not dropped quietly, because the line that goes first
+    is the last one and on these screens the last line is the fix.
+    """
+    out: list[str] = []
+    for index, line in enumerate(lines):
+        if index:
+            out.append("")
+        out.extend(wrapped(line, width))
+    if len(out) <= rows:
+        return out
+    keep = max(0, rows - 1)
+    return out[:keep] + [fit(f"…{len(out) - keep} more — see ~/or3/docs/ytq.md", width)]
 
 
 def message(win, lines: list[str]) -> None:
@@ -1648,14 +2013,14 @@ def message(win, lines: list[str]) -> None:
     nothing was queued, and half of one is no explanation at all.
     """
     win.erase()
-    width = max(20, win.getmaxyx()[1] - 4)
-    row = 1
-    for index, line in enumerate(lines):
-        for wrapped in textwrap.wrap(line, width) or [""]:
-            _addstr(win, row, 2, wrapped, curses.A_BOLD if index == 0 else 0)
-            row += 1
-        row += 1
-    _addstr(win, row, 2, "any key to continue", curses.A_DIM)
+    height, columns = win.getmaxyx()
+    width = max(20, columns - 4)
+    body = message_body(lines, width, max(1, height - 4))
+    # The whole first entry is the verdict, however many lines it wrapped to.
+    head = len(wrapped(lines[0], width)) if lines else 0
+    for row, text in enumerate(body, start=1):
+        _addstr(win, row, 2, text, curses.A_BOLD if row <= head else 0)
+    _addstr(win, height - 2, 1, "any key to continue", curses.A_DIM)
     win.refresh()
     win.getch()
 
@@ -1678,11 +2043,17 @@ def entry(win, paint: dict, initial: str = "") -> str | None:
         "search, or paste a URL" if narrow else "search youtube, or paste a URL",
         curses.A_BOLD | paint.get("head", 0),
     )
+    # Three answers now, and the third is written here or it does not exist:
+    # `subs` is a word typed into a field, with nothing on any screen to
+    # discover it from. The costs stand under it for the same reason they
+    # always did — before anything is spent, rather than in a dialog after.
     if width < 40:
         _addstr(win, 6, 2, "search ~0.1 MB · a URL ~0.3 MB", curses.A_DIM)
+        _addstr(win, 7, 2, "subs → your feed ~0.2 MB", curses.A_DIM)
     else:
         _addstr(win, 6, 2, "words → youtube      ~0.1 MB", curses.A_DIM)
         _addstr(win, 7, 2, "a URL → the formats  ~0.1-0.5 MB", curses.A_DIM)
+        _addstr(win, 8, 2, "subs  → your feed    ~0.2 MB", curses.A_DIM)
     _addstr(
         win,
         height - 2,
@@ -1700,13 +2071,23 @@ def results(
     paint: dict,
     queued: set[int],
     running: Running,
+    feed: bool = False,
+    fetched: float | None = None,
 ) -> int | str | None:
-    """The search results. An index, ``"/"`` to search again, or ``None`` back.
+    """A list of videos. An index, ``"/"`` or ``"r"``, or ``None`` to go back.
 
     Below :data:`WIDE` each result takes two lines, so ten of them are ten
     titles a thumb can read rather than twenty truncated columns. The cursor
     reverses both lines of the one it is on; ``✓`` is the only other mark, and
     only on what this session has already queued.
+
+    One screen for the search results and the subscription feed, because they
+    are the same list of the same things and everything below them — the
+    duplicate marks, the format screen, the confirmation — takes a
+    :class:`Result` and does not care where it came from. *feed* changes the
+    three things that are genuinely different: what the banner calls it, that
+    the listing has an age worth saying (*fetched*), and that the middle key
+    reads it again instead of searching again.
     """
     top = 0
     cursor = 0
@@ -1720,13 +2101,26 @@ def results(
             win,
             0,
             0,
-            fit(f" search: {query} ", width - 1).ljust(width - 1),
+            fit(" subscriptions " if feed else f" search: {query} ", width - 1).ljust(
+                width - 1
+            ),
             curses.A_REVERSE | curses.A_BOLD | paint.get("head", 0),
         )
-        meta = f"{len(hits)} results  ·  ~ approx dates"
-        if not narrow:
-            meta = f"{len(hits)} results  ·  youtube  ·  ~ dates are approximate"
-        _addstr(win, 1, 1, meta, curses.A_DIM)
+        if feed:
+            when = freshness(fetched)
+            meta = f"{len(hits)} videos · ~ approx"
+            if not narrow:
+                meta = f"{len(hits)} videos  ·  newest first  ·  ~ dates are approximate"
+            # Appended rather than made a column: it is absent on the first
+            # draw of a listing fetched a moment ago, and a column that is
+            # sometimes empty reads as something missing.
+            if when:
+                meta += f" · {when}" if narrow else f"  ·  read {when}"
+        else:
+            meta = f"{len(hits)} results  ·  ~ approx dates"
+            if not narrow:
+                meta = f"{len(hits)} results  ·  youtube  ·  ~ dates are approximate"
+        _addstr(win, 1, 1, fit(meta, width - 2), curses.A_DIM)
 
         listed = max(1, (height - 6) // tall)
         cursor = max(0, min(cursor, len(hits) - 1))
@@ -1744,18 +2138,20 @@ def results(
 
         if running.alive:
             _addstr(win, height - 3, 1, running.line(width), curses.A_BOLD)
-        _addstr(
-            win,
-            height - 2,
-            1,
-            hint("running" if running.alive else "results", width)
-            if narrow
-            else (
-                "↑↓ choose   enter see the formats   / search again   q back"
-                + ("   x stop the download" if running.alive else "")
-            ),
-            curses.A_DIM,
-        )
+        if narrow:
+            keys = hint(
+                ("subs" if feed else "results")
+                if not running.alive
+                else ("subs-running" if feed else "running"),
+                width,
+            )
+        else:
+            keys = "↑↓ choose   enter see the formats   " + (
+                "r read it again   q back" if feed else "/ search again   q back"
+            )
+            if running.alive:
+                keys += "   x stop the download"
+        _addstr(win, height - 2, 1, keys, curses.A_DIM)
         win.refresh()
 
         # Blocking unless there is a download to watch, so an idle screen costs
@@ -1772,6 +2168,12 @@ def results(
             return None
         if key == ord("/"):
             return "/"
+        # Live on the feed alone, and named in its hints. A key that is silent
+        # on one list and does something on the other is the shape somebody
+        # presses three times before concluding the tool is broken, so the
+        # feed's own hint carries it and the search's does not.
+        if feed and key == ord("r"):
+            return "r"
         if key == ord("x"):
             running.stop()
         elif key in (curses.KEY_UP, ord("k")):
@@ -1866,6 +2268,9 @@ def app(
     receipts: list[str] = []
     running = Running()
     searched: dict[str, list[Result]] = {}
+    #: When each cached listing was fetched, so the feed can say how old what
+    #: is on screen is. Keyed the same as :data:`searched`.
+    stamps: dict[str, float] = {}
     probed: dict[str, tuple[dict, list[Choice], int]] = {}
     marks: dict[str, set[int]] = {}
     #: Videos this session has been told to queue again despite already having
@@ -1879,6 +2284,10 @@ def app(
     chosen_index = -1
     came_from = "entry"
     screen = "entry"
+    #: Set by ``r`` on the feed and cleared by the fetch it asks for. A flag
+    #: rather than dropping the cache entry, so a look that does not come back
+    #: leaves the listing that was on screen still on screen.
+    refetch = False
 
     # A saved dump stands in for whichever call would have fetched it, so both
     # halves of this can be worked on without spending anything.
@@ -1891,6 +2300,9 @@ def app(
             target = preloaded.get("webpage_url") or preloaded.get("url") or first or ""
             probed[target] = (preloaded, *choices(preloaded))
             screen = "formats"
+    elif first and looks_like_feed(first):
+        # Before the URL test, because the feed's own URL passes that one too.
+        screen = "subs"
     elif first and looks_like_url(first):
         target, screen = first, "formats"
     elif first:
@@ -1902,10 +2314,49 @@ def app(
             typed = ""
             if not text:
                 return receipts
-            if looks_like_url(text):
+            if looks_like_feed(text):
+                screen = "subs"
+            elif looks_like_url(text):
                 target, came_from, screen = text, "entry", "formats"
             else:
                 query, screen = text, "search"
+
+        elif screen == "subs":
+            # Asked before the spinner and before anything is spent: a feed
+            # request with no session behind it does not fail, it comes back
+            # empty, so the page is bought and buys no explanation with it.
+            state, detail = cookie_state()
+            if state in ("none", "missing"):
+                message(win, cookie_advice(state, detail))
+                typed, screen = "", "entry"
+                continue
+            if SUBS_KEY in searched and not refetch:
+                hits = searched[SUBS_KEY]
+            else:
+                found, failure = spinner_while(
+                    win, "reading your subscriptions…", subscriptions
+                )
+                if failure is not None:
+                    message(
+                        win,
+                        ["the subscription feed did not come back", str(failure)]
+                        # The fix and not a second verdict: yt-dlp has already
+                        # said what went wrong on the line above, and expired
+                        # cookies are what it usually means.
+                        + cookie_fix(detail),
+                    )
+                    typed, screen = "", "entry"
+                    continue
+                if found is None:
+                    return receipts
+                hits = searched[SUBS_KEY] = found
+                stamps[SUBS_KEY] = time.time()
+                refetch = False
+            if not hits:
+                message(win, empty_feed_advice(detail))
+                typed, screen = "", "entry"
+                continue
+            query, screen = SUBS_KEY, "results"
 
         elif screen == "search":
             if query in searched:
@@ -1927,6 +2378,7 @@ def app(
                 if found is None:
                     return receipts
                 hits = searched[query] = found
+                stamps[query] = time.time()
             if not hits:
                 message(win, ["nothing found for that", "try different words"])
                 typed, screen = query, "entry"
@@ -1936,6 +2388,7 @@ def app(
         elif screen == "results":
             # Marked with what this session queued *and* what the queue
             # already holds, which are the same fact to whoever is reading it.
+            feed = query == SUBS_KEY
             picked = results(
                 win,
                 query,
@@ -1943,11 +2396,17 @@ def app(
                 paint,
                 marks.setdefault(query, set()) | already_queued(hits),
                 running,
+                feed=feed,
+                fetched=stamps.get(query),
             )
             if picked is None:
                 typed, screen = "", "entry"
+            elif picked == "r":
+                refetch, screen = True, "subs"
             elif isinstance(picked, str):
-                typed, screen = query, "entry"
+                # `/` — the search prefills the field with the words that got
+                # here, and the feed has none to prefill it with.
+                typed, screen = ("" if feed else query), "entry"
             else:
                 chosen_index = picked
                 target, came_from, screen = hits[picked].url, "results", "formats"
@@ -2131,6 +2590,39 @@ def list_results(hits: list[Result], width: int) -> int:
         for line in result_row(result, width):
             print(line)
     return 0
+
+
+def list_feed(count: int = SUBS_RESULTS) -> int:
+    """The subscription feed, printed. The same rows, without a terminal.
+
+    Here for the same reason ``dlqd``'s read-only screens are: this is the one
+    thing on the feed side that something with no terminal can still ask for —
+    a pipe, a script, an ssh session with no tty — and the alternative is that
+    the only way to see the feed at all is a curses app.
+    """
+    def refuse(lines: list[str]) -> int:
+        """The same words the screen uses, one to a line, on stderr.
+
+        The verdict first and prefixed, the working under it, which is the
+        shape ``dlqd status`` prints in — and the reason it is not one long
+        line is that these end in a path somebody has to read.
+        """
+        head, *rest = lines
+        print(f"error: {head}", file=sys.stderr)
+        for line in rest:
+            print(f"  {line}", file=sys.stderr)
+        return 1
+
+    state, detail = cookie_state()
+    if state in ("none", "missing"):
+        return refuse(cookie_advice(state, detail))
+    try:
+        hits = subscriptions(count)
+    except ProbeError as exc:
+        return refuse([str(exc), *cookie_fix(detail)])
+    if not hits:
+        return refuse(empty_feed_advice(detail))
+    return list_results(hits, shutil.get_terminal_size(fallback=(80, 24)).columns)
 
 
 def list_formats(url: str, dump: str | None = None) -> int:
@@ -2380,6 +2872,139 @@ def _self_test() -> int:
     check(
         "a search does not bypass the yt-dlp config", "--ignore-config" in built, False
     )
+
+    # -- the subscription feed ---------------------------------------------- #
+
+    # The same check as the one above it, against the same trap in a worse
+    # shape: without --playlist-end this works perfectly and follows every
+    # continuation YouTube will serve, which for years of subscriptions is
+    # hundreds of pages bought on a metered radio to show thirty rows.
+    fed = subs_argv(30)
+    check("the feed is the subscriptions feed", SUBS_URL in fed, True)
+    check("the feed stays flat", "--flat-playlist" in fed, True)
+    check(
+        "the feed is bounded to what is asked for",
+        "--playlist-end" in fed and fed[fed.index("--playlist-end") + 1] == "30",
+        True,
+    )
+    check("the feed asks for the approximate date", APPROX_DATE_ARGS[1] in fed, True)
+    # The config is where the cookies are, and the feed is the one request here
+    # that does not answer at all without them.
+    check("the feed does not bypass the yt-dlp config", "--ignore-config" in fed, False)
+    # It is a playlist on purpose; --no-playlist would ask for one video.
+    check("the feed is not asked for as a single video", "--no-playlist" in fed, False)
+
+    for word in ("subs", ":subs", "subscriptions", ":ytsubs", SUBS_URL):
+        check(f"{word!r} opens the feed", looks_like_feed(word), True)
+    for word in ("crust of rust", "subscription boxes", "https://youtu.be/aaa"):
+        check(f"{word!r} does not open the feed", looks_like_feed(word), False)
+    # The feed's URL passes the URL test too, so the order the entry screen
+    # asks in is the whole of what stops it being probed as a video and
+    # refused as a playlist.
+    check("the feed URL is a URL as well", looks_like_url(SUBS_URL), True)
+
+    # An empty answer is the one that has to be read right: it is not an error
+    # and it is not an empty subscription list, and calling it either is how a
+    # tool opened once a day says nothing is wrong for a fortnight.
+    check(
+        "an empty feed is never reported as being up to date",
+        any("signed-out" in line for line in empty_feed_advice("x")),
+        True,
+    )
+    for lines in (
+        cookie_advice("none", "detail"),
+        cookie_advice("missing", "detail"),
+        empty_feed_advice("detail"),
+    ):
+        check("every dead end names the jar", any(COOKIE_SUGGESTION in x for x in lines), True)
+        check("and repeats what was found", "detail" in lines, True)
+
+    # The two paths the screens name have to be two of the ones actually read,
+    # or every dead end here sends somebody to a file nothing consults.
+    check(
+        "the config the screens name is one yt-dlp reads",
+        Path(CONFIG_SUGGESTION).expanduser() in config_paths(),
+        True,
+    )
+
+    # `message` pins its own "any key to continue" to the bottom row and
+    # bounds the body above it — but a notice that has to be truncated to fit
+    # is a fix somebody cannot read, so every notice this tool can raise is
+    # measured against the smallest screen it is read on. 40x24 is Termux in
+    # portrait; the body gets height - 4 of those rows.
+    PHONE_ROWS, PHONE_WRAP = 24 - 4, 40 - 4
+    for name, lines in (
+        ("no cookies", cookie_advice("none", "there is no yt-dlp config at " + CONFIG_SUGGESTION)),
+        ("a missing jar", cookie_advice("missing", f"{COOKIE_SUGGESTION} is named by {CONFIG_SUGGESTION} but is not there")),
+        ("a refusal", ["the subscription feed did not come back",
+                       "Sign in to confirm you are not a bot",
+                       *cookie_fix(f"{COOKIE_SUGGESTION}, written 12 days ago")]),
+        ("an empty feed", empty_feed_advice(f"{COOKIE_SUGGESTION}, written 12 days ago")),
+    ):
+        body = message_body(lines, PHONE_WRAP, PHONE_ROWS)
+        check(f"the {name} notice fits a phone whole", len(body), len(message_body(lines, PHONE_WRAP, 999)))
+        for row in body:
+            at_most(f"and every line of the {name} notice fits it", len(row), PHONE_WRAP)
+        # Every one of these ends in a path or a flag, and a path wrapped
+        # across two lines is a path somebody retypes wrong.
+        for token in (COOKIE_SUGGESTION, CONFIG_SUGGESTION, "--cookies"):
+            if any(token in line for line in lines):
+                check(
+                    f"the {name} notice keeps {token} in one piece",
+                    any(token in row for row in body),
+                    True,
+                )
+    # And when one does not fit, the truncation says so rather than simply
+    # ending — an explanation that stops mid-sentence reads as a crash.
+    squeezed = message_body(["a", "b", "c", "d", "e", "f"], 20, 4)
+    check("a body too long for the screen is bounded", len(squeezed), 4)
+    check("and says what was dropped", "more" in squeezed[-1], True)
+
+    check("a listing read a moment ago says so", freshness(1000, 1030), "just now")
+    check("one read a while ago says how long", freshness(1000, 1000 + 3600), "60m ago")
+    check("and a much older one drops to hours", freshness(1000, 1000 + 4 * 3600), "4h ago")
+    check("a listing never fetched says nothing", freshness(None), "")
+    check("cookies written today say today", written(1000, 1000), "today")
+    check("cookies from three weeks ago say so", written(0, 21 * 86400), "21 days ago")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        conf = Path(tmp) / "config"
+        jar = Path(tmp) / "cookies.txt"
+        absent = Path(tmp) / "no-such-config"
+        # Parsed the way yt-dlp parses it, driven on a real file: a `#` comment
+        # naming the flag is a comment in both, or this screen and yt-dlp
+        # disagree about whether cookies are configured.
+        conf.write_text(
+            "# once had --cookies /old/jar.txt here\n"
+            "--js-runtimes node\n"
+            f"--cookies {jar}\n",
+            encoding="utf-8",
+        )
+        check("the --cookies line is found", declared_cookies([conf])[1], str(jar))
+        check("a commented-out one is not", declared_cookies([absent]), None)
+        check("nor is a config that is not there", cookie_state([absent])[0], "none")
+
+        check("a named jar that is not on disk is not a go", cookie_state([conf])[0], "missing")
+        jar.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+        check("one that is, is", cookie_state([conf])[0], "file")
+        # The age is the fact that turns "the feed is empty" into something
+        # somebody can act on, so it is on the screen and not only in a log.
+        check("and says when it was written", "today" in cookie_state([conf])[1], True)
+        jar.write_text("", encoding="utf-8")
+        check("an empty jar is no jar", cookie_state([conf])[0], "missing")
+
+        conf.write_text("--cookies-from-browser chrome\n", encoding="utf-8")
+        check(
+            "a browser is a declaration too",
+            cookie_state([conf])[0],
+            "browser",
+        )
+        conf.write_text(f"--cookies={jar}\n", encoding="utf-8")
+        check(
+            "and the flag=value spelling is the same flag",
+            declared_cookies([conf])[1],
+            str(jar),
+        )
 
     envelope = {
         "_type": "playlist",
@@ -2779,6 +3404,8 @@ def main(argv: list[str] | None = None) -> int:
             examples:
               ytq                       search, or paste a URL, then pick
               ytq crust of rust         search youtube (~0.1 MB)
+              ytq subs                  browse your subscription feed
+              ytq --list --subs         print the feed, write nothing
               ytq URL                   probe (~0.1-0.5 MB), pick, queue
               ytq --now URL             pick, then start it in the background
               ytq --list URL            print formats and caps, write nothing
@@ -2798,6 +3425,12 @@ def main(argv: list[str] | None = None) -> int:
         "--list",
         action="store_true",
         help="print the formats and exit, writing nothing",
+    )
+    parser.add_argument(
+        "--subs",
+        action="store_true",
+        help="open the subscription feed instead of searching; needs the "
+        "cookies the yt-dlp config already points at",
     )
     parser.add_argument(
         "--now",
@@ -2828,9 +3461,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.self_test:
         return _self_test()
 
+    if args.subs and first:
+        parser.error("--subs is the whole request; it takes no words or URL")
+
     if args.list:
         if args.now:
             parser.error("--list writes nothing, so there is nothing for --now to run")
+        if args.subs:
+            if args.from_json:
+                parser.error("--subs asks youtube; --from-json reads a saved dump")
+            return list_feed()
         if not (first or args.from_json):
             parser.error("--list needs a URL or --from-json")
         if first and not looks_like_url(first):
@@ -2845,8 +3485,17 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: {exc}", file=sys.stderr)
             return 1
 
+    if args.subs:
+        # `--subs` is the flag spelling of the word the entry field already
+        # takes, handed to `app` down that one road rather than as a second
+        # way in. One door: whatever routes `subs` routes this.
+        first = ":subs"
+
     if not sys.stdout.isatty():
-        print("ytq needs a terminal; use --list <url> otherwise", file=sys.stderr)
+        print(
+            "ytq needs a terminal; use --list <url> or --list --subs otherwise",
+            file=sys.stderr,
+        )
         return 2
 
     os.environ.setdefault("ESCDELAY", "25")
