@@ -177,8 +177,17 @@ HINTS = {
     # The feed's own pair. What changes is the middle key: a search is re-run
     # by retyping it, so `/` earns its place there; the feed has nothing to
     # retype and what it needs instead is a way to read it again.
-    "subs": "↑↓ pick  ⏎ quality  r fresh  q back",
-    "subs-running": "x stop  ↑↓ pick  ⏎ quality  q back",
+    # ↑↓ is dropped from these two and nowhere else: it is the most guessable
+    # key on a list and `m` is the one whose absence costs somebody the videos
+    # they came here for.
+    "subs": "⏎ quality  m more  r fresh  q back",
+    "subs-running": "x stop  ⏎ quality  m more  q back",
+    # And the same two with `m` spent. A key drawn in the hints that does
+    # nothing when pressed is the shape somebody presses three times before
+    # deciding the tool is broken — and this one used to look like the way to
+    # the older videos it can no longer reach.
+    "subs-end": "⏎ quality  r fresh  q back",
+    "subs-end-running": "x stop  ⏎ quality  q back",
     "pick": "↑↓ pick  ⏎ queue  n now  q back  ~ est",
     "pick-now": "↑↓ pick  ⏎ now PAID  t queue  q back",
     "queue": "⏎ queue  e edit  n now  q back",
@@ -196,8 +205,10 @@ TIGHT_HINTS = {
     "entry": "⏎ go  esc quit",
     "results": "↑↓  ⏎ formats  / new  q back",
     "running": "x stop  ↑↓  ⏎ formats  q back",
-    "subs": "↑↓  ⏎ formats  r fresh  q back",
-    "subs-running": "x stop  ↑↓  ⏎ formats  q back",
+    "subs": "⏎ pick  m more  r new  q back",
+    "subs-running": "x stop  ⏎ pick  m more  q back",
+    "subs-end": "⏎ pick  r new  q back",
+    "subs-end-running": "x stop  ⏎ pick  q back",
     "pick": "↑↓  ⏎ queue  n now  q back",
     "pick-now": "↑↓  ⏎ now PAID  q back",
     "queue": "⏎ queue  e edit  n now  q back",
@@ -232,6 +243,26 @@ SUBS_URL = "https://www.youtube.com/feed/subscriptions"
 #: time and yt-dlp will follow every continuation it is offered, so this is a
 #: bound and not a preference — see :func:`subs_argv`.
 SUBS_RESULTS = 30
+
+#: What ``m`` adds to that bound, and where it stops. The cap is not a
+#: technical limit: it is there because every press costs more than the last
+#: (see :func:`feed_cost`) and a list you can keep extending with one thumb is
+#: a list somebody extends five times without meaning to.
+SUBS_PAGE = 30
+SUBS_MAX = 150
+
+#: Roughly what one page of the feed costs on the wire. An estimate by analogy
+#: with the search page and NOT measured on the vessel's link — the figure to
+#: correct from ``docs/data-ledger.md`` when somebody does measure it. It is
+#: printed rather than kept quiet because a key whose price is unknown to the
+#: person pressing it is the one thing this whole tool exists to avoid.
+SUBS_PAGE_MB = 0.2
+
+#: A fetch of *count* videos is given this long. It scales because a timeout
+#: that fires part way through has spent the bytes and kept none of them —
+#: the worst outcome available here, and worse the deeper the ask.
+SUBS_TIMEOUT_BASE = 120
+SUBS_TIMEOUT_PER = 4
 
 #: What the feed is called in the caches the session keeps, where a search is
 #: keyed on the words that produced it. Not a query anybody can type, so it
@@ -645,13 +676,86 @@ def subs_argv(count: int = SUBS_RESULTS) -> list[str]:
     ]
 
 
-def subscriptions(count: int = SUBS_RESULTS, timeout: int = 180) -> list[Result]:
+def subscriptions(count: int = SUBS_RESULTS, timeout: int | None = None) -> list[Result]:
     """The newest *count* videos from the subscription feed, newest first.
 
     Longer than a search's timeout because the tab page is bigger and the
-    connection is the vessel's, not a datacentre's.
+    connection is the vessel's, not a datacentre's — and longer again the more
+    is asked for, because giving up part way through has spent every byte
+    walked so far and kept nothing.
     """
+    if timeout is None:
+        timeout = SUBS_TIMEOUT_BASE + SUBS_TIMEOUT_PER * count
     return entries(ask(subs_argv(count), timeout))
+
+
+def feed_cost(count: int) -> str:
+    """Roughly what reading *count* videos off the feed costs, in words.
+
+    The **total**, never the increment, and that is the whole point of the
+    function. YouTube's continuations are sequential: there is no asking for
+    videos 31 to 60 without walking 1 to 30 to reach them, so going deeper
+    re-buys everything already on screen. A key labelled "+30" while spending
+    the lot is a bill nobody agreed to.
+
+    Marked ``~`` for the same reason every size on the format list is: the
+    per-page figure is an estimate, not a measurement.
+    """
+    return f"~{count / SUBS_RESULTS * SUBS_PAGE_MB:.1f} MB"
+
+
+def feed_meta(
+    count: int, when: str, more: int | None, at_cap: bool, width: int
+) -> str:
+    """The feed's second line: how much is on it, how old, and what more costs.
+
+    Pure and width-aware rather than composed at the point of drawing, because
+    the thing it carries is a **price** and a price clipped off the end of a
+    line is worse than no price at all — which is exactly what happened the
+    first time this was written inline: ``m 60 for ~0.4 …`` on a 40-column
+    phone, the figure lost and the key still offered.
+
+    It replaces "~ dates are approximate", which every row already says for
+    itself with a ``~`` beside its age. This does not say itself anywhere.
+    """
+    if more:
+        # No spaces inside the figure at the floor: this line is read, not
+        # parsed, and the columns are better spent on the number than on the
+        # gap in front of MB.
+        deeper = (
+            f"m {more} for {feed_cost(more)}"
+            if width >= WIDE
+            else f"m {more} {feed_cost(more).replace(' ', '')}"
+        )
+    else:
+        deeper = "at the cap" if at_cap else "the whole feed"
+    parts = [f"{count} videos"]
+    # The age is the first thing to go, and it is the right one: it is a
+    # comfort, where the other two are the answer and the price.
+    if when and width >= TIGHT:
+        parts.append(f"read {when}" if width >= WIDE else when)
+    parts.append(deeper)
+    return ("  ·  " if width >= WIDE else " · ").join(parts)
+
+
+def next_page(got: int, asked: int) -> tuple[int | None, bool]:
+    """``(the total a deeper look would ask for, whether the cap stopped it)``.
+
+    ``(None, False)`` is the end of the feed: YouTube handed back fewer than
+    it was asked for, so there is nothing further back to reach and asking
+    again would buy the same bytes to learn the same thing. That is the case
+    worth getting right — a ``m`` that stays live at the bottom of the feed
+    spends real quota on nothing, every press, and looks exactly like one that
+    is working.
+
+    ``(None, True)`` is the cap, which is a different sentence: there IS more
+    and this will not spend it. The screen says which of the two it is.
+    """
+    if got < asked:
+        return None, False
+    if asked >= SUBS_MAX:
+        return None, True
+    return min(SUBS_MAX, asked + SUBS_PAGE), False
 
 
 #: The words the one entry field takes for the feed. ``:ytsubs`` is yt-dlp's
@@ -1398,6 +1502,71 @@ def wrapped(text: str, width: int) -> list[str]:
     return textwrap.wrap(text, width, break_on_hyphens=False) or [""]
 
 
+#: One step of a scrolling title, and how many steps it holds still at each
+#: end of a lap before moving again. Slow on purpose: this is a list somebody
+#: is reading, not an animation, and a title that snaps past faster than it
+#: can be read has cost a wakeup to say nothing.
+MARQUEE_MS = 300
+MARQUEE_HOLD = 5
+
+#: What separates the end of a scrolling title from its own beginning, so that
+#: the lap is visible as a lap. Without it a wrapped title reads as one long
+#: string with a nonsense join in the middle of it.
+MARQUEE_GAP = "   ·   "
+
+
+def marquee(text: str, width: int, tick: int) -> str:
+    """*width* characters of *text*, scrolled to step *tick*.
+
+    Text that fits is returned whole and unmoved, which is what makes this
+    safe to call on every row: the motion is a property of the title being too
+    long, never of the row being selected.
+
+    A lap holds at the start for :data:`MARQUEE_HOLD` steps before it moves —
+    the beginning of a title is the part a choice is usually made on, and a
+    line already sliding when the eye arrives is one that has to be waited out
+    for a whole lap to read.
+
+    Deliberately *not* :func:`fit`: no ellipsis. The ellipsis is how a clipped
+    line says something was lost, and a line that is visibly moving has
+    already said it.
+    """
+    if width <= 0:
+        return ""
+    if len(text) <= width:
+        return text
+    loop = text + MARQUEE_GAP
+    phase = max(0, tick) % (len(loop) + MARQUEE_HOLD)
+    offset = 0 if phase < MARQUEE_HOLD else phase - MARQUEE_HOLD
+    return (loop + loop)[offset : offset + width]
+
+
+def title_room(result: Result, width: int) -> int:
+    """The columns a result's title gets on the row that draws it.
+
+    One function, because two things have to agree about it and they are in
+    different places: :func:`result_row`, which draws the title, and
+    :func:`results`, which decides whether to keep waking up to scroll it.
+    Written twice they drift, and the failure is silent both ways — a title
+    that moves for no reason, or an idle screen paying a wakeup every 300ms
+    for ever.
+    """
+    if width >= WIDE:
+        tail = (
+            f"{fit(result.channel or '?', 16):<16}  "
+            f"{age(result.timestamp):>5}  {clock(result.duration, result.live):>7}"
+        )
+        return max(8, width - 5 - len(tail))
+    # Two columns for the mark, one in hand at the right — the same arithmetic
+    # the narrow branch of `result_row` lays out with.
+    return max(4, width - 1 - 2)
+
+
+def scrolls(result: Result, width: int) -> bool:
+    """Whether this title is longer than the room it has, and so has to move."""
+    return len(result.title) > title_room(result, width)
+
+
 def nights(size: int) -> int:
     """How many nightly windows a download this big needs, at the least.
 
@@ -1479,7 +1648,9 @@ def format_row(option: Choice, width: int) -> str:
     return (line[: max(0, width - len(note))] + note)[:width]
 
 
-def result_row(result: Result, width: int, queued: bool = False) -> list[str]:
+def result_row(
+    result: Result, width: int, queued: bool = False, tick: int | None = None
+) -> list[str]:
     """One search hit, as the one or two lines there is room for.
 
     Four facts and a 40-column phone do not share a line without mutilating the
@@ -1491,31 +1662,43 @@ def result_row(result: Result, width: int, queued: bool = False) -> list[str]:
     than clipping the finished line: clipping would drop the length and the age,
     which are two of the four things this screen exists to say. The channel is
     the one that can afford to lose its end.
+
+    *tick* is the scroll step for a title too long for its room, and ``None``
+    is "do not move" — which is every row but the one under the cursor, and
+    every caller with no clock at all (:func:`list_results`, printing to a
+    pipe). Only one row moves because a list where every line slides is a list
+    nothing can be read off, and the cursor is the row a choice is being made
+    on.
     """
     when = age(result.timestamp)
     long = clock(result.duration, result.live)
     channel = result.channel or "?"
     mark = "✓" if queued else " "
+    room = title_room(result, width)
+    title = fit(result.title, room) if tick is None else marquee(
+        result.title, room, tick
+    )
 
     if width >= WIDE:
         tail = f"{fit(channel, 16):<16}  {when:>5}  {long:>7}"
         # mark, a space, the title, two spaces, the tail — and one column in
         # hand, because a line drawn into the last cell is a wrapped line.
-        room = max(8, width - 5 - len(tail))
-        return [f"{mark} {fit(result.title, room):<{room}}  {tail}"[: width - 1]]
+        return [f"{mark} {title:<{room}}  {tail}"[: width - 1]]
 
     # Two columns for the mark whether or not there is one, so that queueing a
     # result does not shift its title one to the right of its neighbours'.
     prefix = "✓ " if queued else "  "
     tail = f"{when} · {long}"
-    room = max(3, width - 7 - len(tail))
+    # The channel's room, not the title's — a different line and a different
+    # sum, named apart so the two cannot be confused for one another.
+    channel_room = max(3, width - 7 - len(tail))
     return [
-        (prefix + fit(result.title, max(4, width - 1 - len(prefix))))[: width - 1],
+        (prefix + title)[: width - 1],
         # Packed left and not padded into a column: the age and the length are
         # different lengths on every row, so a column here would put the dots
         # in a different place on each line and read as a ragged table rather
         # than as the sentence it is.
-        f"   {fit(channel, room)} · {tail}"[: width - 1],
+        f"   {fit(channel, channel_room)} · {tail}"[: width - 1],
     ]
 
 
@@ -2073,6 +2256,8 @@ def results(
     running: Running,
     feed: bool = False,
     fetched: float | None = None,
+    more: int | None = None,
+    at_cap: bool = False,
 ) -> int | str | None:
     """A list of videos. An index, ``"/"`` or ``"r"``, or ``None`` to go back.
 
@@ -2085,12 +2270,24 @@ def results(
     are the same list of the same things and everything below them — the
     duplicate marks, the format screen, the confirmation — takes a
     :class:`Result` and does not care where it came from. *feed* changes the
-    three things that are genuinely different: what the banner calls it, that
-    the listing has an age worth saying (*fetched*), and that the middle key
-    reads it again instead of searching again.
+    four things that are genuinely different: what the banner calls it, that
+    the listing has an age worth saying (*fetched*), that the middle key reads
+    it again instead of searching again, and that there is more of it to be
+    bought (*more*, the total a deeper look would ask for, with *at_cap*
+    telling the two ways of having none apart — see :func:`next_page`).
+
+    The title under the cursor scrolls when it does not fit. The screen only
+    wakes up to do that while there is actually something scrolling, so a list
+    of short titles still blocks on the keyboard and costs nothing at all,
+    which is the property this loop was written for in the first place.
     """
     top = 0
     cursor = 0
+    #: The scroll step for the cursor's title, and the cursor it belongs to.
+    #: Reset on every move, so a title just arrived at starts from its
+    #: beginning rather than half way through somebody else's lap.
+    tick = 0
+    ticking_for = -1
 
     while True:
         win.erase()
@@ -2107,15 +2304,12 @@ def results(
             curses.A_REVERSE | curses.A_BOLD | paint.get("head", 0),
         )
         if feed:
-            when = freshness(fetched)
-            meta = f"{len(hits)} videos · ~ approx"
-            if not narrow:
-                meta = f"{len(hits)} videos  ·  newest first  ·  ~ dates are approximate"
-            # Appended rather than made a column: it is absent on the first
-            # draw of a listing fetched a moment ago, and a column that is
-            # sometimes empty reads as something missing.
-            if when:
-                meta += f" · {when}" if narrow else f"  ·  read {when}"
+            # What `m` costs stands on the screen before it is pressed, which
+            # is the entry screen's rule applied to the one key here that
+            # spends.
+            meta = feed_meta(
+                len(hits), freshness(fetched), more, at_cap, width
+            )
         else:
             meta = f"{len(hits)} results  ·  ~ approx dates"
             if not narrow:
@@ -2125,6 +2319,8 @@ def results(
         listed = max(1, (height - 6) // tall)
         cursor = max(0, min(cursor, len(hits) - 1))
         top = max(min(top, cursor), cursor - listed + 1, 0)
+        if cursor != ticking_for:
+            tick, ticking_for = 0, cursor
 
         for row in range(listed):
             index = top + row
@@ -2132,37 +2328,55 @@ def results(
                 break
             attr = curses.A_REVERSE if index == cursor else 0
             for offset, line in enumerate(
-                result_row(hits[index], width, index in queued)
+                result_row(
+                    hits[index], width, index in queued, tick if index == cursor else None
+                )
             ):
                 _addstr(win, 3 + row * tall + offset, 0, line.ljust(width - 1), attr)
 
         if running.alive:
             _addstr(win, height - 3, 1, running.line(width), curses.A_BOLD)
         if narrow:
-            keys = hint(
-                ("subs" if feed else "results")
-                if not running.alive
-                else ("subs-running" if feed else "running"),
-                width,
-            )
+            if feed:
+                # `-end` when there is nothing further back to buy, so the
+                # hints and the meta line agree about whether `m` is a key.
+                name = "subs" if more else "subs-end"
+                name += "-running" if running.alive else ""
+            else:
+                name = "running" if running.alive else "results"
+            keys = hint(name, width)
         else:
-            keys = "↑↓ choose   enter see the formats   " + (
-                "r read it again   q back" if feed else "/ search again   q back"
-            )
+            keys = "↑↓ choose   enter see the formats"
+            if feed:
+                if more:
+                    keys += f"   m {more - len(hits)} more"
+                keys += "   r read it again"
+            else:
+                keys += "   / search again"
+            keys += "   q back"
             if running.alive:
                 keys += "   x stop the download"
         _addstr(win, height - 2, 1, keys, curses.A_DIM)
         win.refresh()
 
-        # Blocking unless there is a download to watch, so an idle screen costs
-        # no wakeups at all and a live one redraws twice a second.
-        win.timeout(500 if running.alive else -1)
+        # Blocking unless there is something to redraw for, so an idle screen
+        # costs no wakeups at all: a live download redraws twice a second, a
+        # title too long for its room a little faster than that, and a screen
+        # with neither waits on the keyboard the way it always did.
+        moving = bool(hits) and scrolls(hits[cursor], width)
+        waits = [500] if running.alive else []
+        if moving:
+            waits.append(MARQUEE_MS)
+        win.timeout(min(waits) if waits else -1)
         try:
             key = win.getch()
         finally:
             win.timeout(-1)
 
         if key == -1:
+            # A timeout and not a keypress: the only thing a step of the clock
+            # advances is the scroll.
+            tick += 1
             continue
         if key in (ord("q"), 27):
             return None
@@ -2174,6 +2388,11 @@ def results(
         # feed's own hint carries it and the search's does not.
         if feed and key == ord("r"):
             return "r"
+        # Guarded on there actually being more, so that at the bottom of the
+        # feed this is a key that does nothing rather than one that buys the
+        # same listing again — and the meta line above says which it is.
+        if feed and more and key == ord("m"):
+            return "m"
         if key == ord("x"):
             running.stop()
         elif key in (curses.KEY_UP, ord("k")):
@@ -2288,6 +2507,19 @@ def app(
     #: rather than dropping the cache entry, so a look that does not come back
     #: leaves the listing that was on screen still on screen.
     refetch = False
+    #: How deep the feed has been asked for, which ``m`` raises a page at a
+    #: time. Kept here rather than derived from ``len(hits)``: a feed that
+    #: handed back 28 of the 30 asked for has been asked for 30, and it is the
+    #: gap between those two numbers that says there is no more to come.
+    #:
+    #: Two of them, and that is the point: ``subs_want`` is what the next
+    #: fetch will ask for and ``subs_asked`` is what the listing on screen was
+    #: actually answered at. One variable said the deeper number the moment
+    #: ``m`` was pressed, so a deeper fetch that FAILED left thirty videos on
+    #: screen beside a claim that sixty had been asked for — which
+    #: :func:`next_page` reads as the end of the feed, and the screen then
+    #: says "the whole feed" over a third of it with `m` switched off.
+    subs_asked = subs_want = SUBS_RESULTS
 
     # A saved dump stands in for whichever call would have fetched it, so both
     # halves of this can be worked on without spending anything.
@@ -2334,7 +2566,10 @@ def app(
                 hits = searched[SUBS_KEY]
             else:
                 found, failure = spinner_while(
-                    win, "reading your subscriptions…", subscriptions
+                    win,
+                    f"reading your subscriptions — {subs_want}, "
+                    f"{feed_cost(subs_want)}…",
+                    lambda count=subs_want: subscriptions(count),
                 )
                 if failure is not None:
                     message(
@@ -2345,12 +2580,18 @@ def app(
                         # cookies are what it usually means.
                         + cookie_fix(detail),
                     )
+                    # Back to the depth the listing on screen really is: a
+                    # deeper ask that did not come back is not a deeper ask.
+                    subs_want = subs_asked
                     typed, screen = "", "entry"
                     continue
                 if found is None:
                     return receipts
                 hits = searched[SUBS_KEY] = found
                 stamps[SUBS_KEY] = time.time()
+                # Committed here and nowhere else — the depth the answer on
+                # screen was actually answered at.
+                subs_asked = subs_want
                 refetch = False
             if not hits:
                 message(win, empty_feed_advice(detail))
@@ -2389,6 +2630,9 @@ def app(
             # Marked with what this session queued *and* what the queue
             # already holds, which are the same fact to whoever is reading it.
             feed = query == SUBS_KEY
+            more, at_cap = (
+                next_page(len(hits), subs_asked) if feed else (None, False)
+            )
             picked = results(
                 win,
                 query,
@@ -2398,11 +2642,18 @@ def app(
                 running,
                 feed=feed,
                 fetched=stamps.get(query),
+                more=more,
+                at_cap=at_cap,
             )
             if picked is None:
                 typed, screen = "", "entry"
             elif picked == "r":
                 refetch, screen = True, "subs"
+            elif picked == "m":
+                # The whole listing is bought again, not the extra thirty —
+                # `feed_cost` is the total for that reason, and the screen
+                # that offered this key said the total.
+                subs_want, refetch, screen = more, True, "subs"
             elif isinstance(picked, str):
                 # `/` — the search prefills the field with the words that got
                 # here, and the feed has none to prefill it with.
@@ -2893,6 +3144,113 @@ def _self_test() -> int:
     check("the feed does not bypass the yt-dlp config", "--ignore-config" in fed, False)
     # It is a playlist on purpose; --no-playlist would ask for one video.
     check("the feed is not asked for as a single video", "--no-playlist" in fed, False)
+
+    # -- going further back ------------------------------------------------- #
+
+    check("a deeper look is bounded to what it asked for",
+          subs_argv(90)[subs_argv(90).index("--playlist-end") + 1], "90")
+
+    # The end of the feed is the case that costs real quota to get wrong: an
+    # `m` still live at the bottom buys the same listing again on every press
+    # and looks exactly like one that is working.
+    check("a short answer is the end of the feed", next_page(28, 30), (None, False))
+    check("a full answer means there is more", next_page(30, 30), (60, False))
+    check("and the cap is a different sentence", next_page(150, 150), (None, True))
+    check("which the last page reaches exactly", next_page(120, 120), (150, False))
+    check("and never overshoots", next_page(SUBS_MAX - 1, SUBS_MAX - 1)[0], SUBS_MAX)
+
+    # The figure is the TOTAL, because youtube's continuations are sequential
+    # and there is no reaching 31-60 without walking 1-30 again. A key priced
+    # at the increment while spending the lot is the bill nobody agreed to.
+    check("one page is priced at one page", feed_cost(30), "~0.2 MB")
+    check("and two pages at two", feed_cost(60), "~0.4 MB")
+    check("the deepest look says what it costs", feed_cost(SUBS_MAX), "~1.0 MB")
+
+    # The price is the reason this line exists, so it may never be the part
+    # that gets clipped off the end of it — which is what the first inline
+    # version did on a 40-column phone: `m 60 for ~0.4 …`, figure gone, key
+    # still offered. Measured at the two floors the hints are measured at.
+    for span, room in ((40, HINT_WIDTH), (32, TIGHT_WIDTH)):
+        for count, when, more, at_cap in (
+            (30, "just now", 60, False),
+            (120, "12m ago", SUBS_MAX, False),
+            (SUBS_MAX, "2h ago", None, True),
+            (65, "just now", None, False),
+            (30, "", 60, False),
+        ):
+            line = feed_meta(count, when, more, at_cap, span)
+            at_most(f"the feed's meta fits {span} at {count}/{more}", len(line), room)
+            if more:
+                check(
+                    f"and keeps the price whole at {span}",
+                    feed_cost(more).replace(" ", "") in line.replace(" ", ""),
+                    True,
+                )
+            else:
+                check(
+                    f"and says why m is gone at {span}",
+                    ("cap" if at_cap else "whole feed") in line,
+                    True,
+                )
+    check("the wide meta spells the price out", "for ~0.4 MB" in feed_meta(30, "just now", 60, False, 80), True)
+    # The hints and the meta have to agree about whether `m` is a key: one of
+    # them saying "more" while the other says "the whole feed" is the state
+    # that gets pressed three times.
+    for name in ("subs", "subs-running", "subs-end", "subs-end-running"):
+        check(f"{name} is a screen both hint sets know", name in HINTS and name in TIGHT_HINTS, True)
+        check(
+            f"and only {name} without -end offers m",
+            "m " in hint(name, 40),
+            not name.startswith("subs-end"),
+        )
+
+    # -- long titles scroll rather than being cut off ------------------------ #
+
+    check("a title that fits does not move", marquee("short", 20, 7), "short")
+    # Long enough to overrun even a wide terminal, which is the whole set this
+    # is checked across: `scrolls` is a fact about the title and the room, not
+    # about the screen being a phone.
+    long = (
+        "A very long video title that will not fit a phone held in portrait, "
+        "nor a terminal much wider than one"
+    )
+    check("one that does not fit is cut to the room it has", len(marquee(long, 20, 0)), 20)
+    # The beginning is the part a choice is usually made on, so a lap holds
+    # there before it moves — a line already sliding when the eye arrives has
+    # to be waited out for a whole lap to read.
+    for step in range(MARQUEE_HOLD + 1):
+        check(f"it holds at its beginning for step {step}", marquee(long, 20, step), marquee(long, 20, 0))
+    check("then starts moving", marquee(long, 20, MARQUEE_HOLD + 1) != marquee(long, 20, 0), True)
+    check("by exactly one column a step", marquee(long, 20, MARQUEE_HOLD + 1), (long + MARQUEE_GAP)[1:21])
+    lap = len(long) + len(MARQUEE_GAP) + MARQUEE_HOLD
+    check("and comes back round to where it began", marquee(long, 20, lap), marquee(long, 20, 0))
+    check("a gap makes the lap visible", MARQUEE_GAP.strip() != "", True)
+    check("no width is not a crash", marquee(long, 0, 3), "")
+
+    # `result_row` draws the title and `results` decides whether to keep waking
+    # up to scroll it. They read the room from one function so they cannot
+    # disagree — the failure is silent either way: a row that moves for no
+    # reason, or an idle screen paying a wakeup every 300ms for ever.
+    tall = Result(long, "Chan", "https://y/x", 61, 1_600_000_000)
+    short = Result("Brief", "Chan", "https://y/x", 61, 1_600_000_000)
+    for span in (32, 40, 72, 100):
+        check(f"a long title has to scroll at {span}", scrolls(tall, span), True)
+        check(f"a short one does not at {span}", scrolls(short, span), False)
+        # Standing still is what every row but the cursor's does, and what
+        # `list_results` does printing into a pipe with no clock at all.
+        still = result_row(tall, span, False, None)
+        for row in still:
+            at_most(f"a still row fits {span}", len(row), span - 1)
+        for step in (0, MARQUEE_HOLD, MARQUEE_HOLD + 9, lap + 3):
+            for row in result_row(tall, span, True, step):
+                at_most(f"and so does a scrolling one at {span}", len(row), span - 1)
+    # The mark must not shift the title, moving or still — a queued row that
+    # slid one column right of its neighbours would read as a broken list.
+    check(
+        "queueing a row does not shift its scrolling title",
+        len(result_row(tall, 40, True, 9)[0]) == len(result_row(tall, 40, False, 9)[0]),
+        True,
+    )
 
     for word in ("subs", ":subs", "subscriptions", ":ytsubs", SUBS_URL):
         check(f"{word!r} opens the feed", looks_like_feed(word), True)
