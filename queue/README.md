@@ -23,10 +23,10 @@ next night there is expiring allowance for it.
 | `SLICE_MIN_BYTES` | no | smallest slice worth starting (default 32 MiB) |
 | `DEST` | no | where the finished file is put — see below |
 | `SOURCE` | no | what this is a download *of*, for spotting duplicates |
-| `DESC` | no | shown by `dlqd status` |
+| `DESC` | no | shown by `dlq status` |
 
 `DEST` is `video`, `file`, or an absolute path. The two words are the
-destinations `dlqd dest` configures — `video` is where `ytq` puts things,
+destinations `dlq dest` configures — `video` is where `ytq` puts things,
 `file` where `dlq` does — and they are **resolved when the file is delivered**,
 not when the item was queued, so changing one moves what is already waiting in
 the queue too. An absolute path overrides both.
@@ -103,7 +103,7 @@ the queue forever.
 ## Use the shared downloader
 
 `expire_dl` handles slicing, resume, validators and reporting. For a direct
-file URL, `python3 ../expire_sched.py dlq <url>` writes this whole item for you, sized from
+file URL, `python3 ../expire_sched.py <url>` writes this whole item for you, sized from
 the server's own headers. By hand, a complete item:
 
 ```python
@@ -173,7 +173,7 @@ a well-behaved item is never killed and always leaves a resumable file.
 
 All three are read off the portal, so all three are gone when it cannot be
 reached — the phone on mobile data, or the portal down — and a run in that state
-has to be asked for by name (`dlqd run-now --blind`, which says what it will
+has to be asked for by name (`dlq run-now --blind`, which says what it will
 spend and waits for a yes). **Nothing about the contract changes**, and no item
 needs to know it is happening: it is still handed `EXPIRE_SLICE_BYTES`, still
 killed if it crosses its cap on the wire, and still expected to leave a
@@ -182,6 +182,6 @@ the item exactly as it always is, and now the only ceiling there is.
 
 The one field that reads differently is `EXPIRE_STOP_EPOCH`, and only because a
 blind run has no deadline to put there: it arrives as **`0`**, which the
-contract already defines as "no stop" and which `dlqd now` has always passed.
+contract already defines as "no stop" and which `dlq now` has always passed.
 An item that honours it needs no change; one that assumed a non-zero epoch was
-already wrong for `dlqd now`.
+already wrong for `dlq now`.

@@ -1,8 +1,8 @@
 #!/data/data/com.termux/files/usr/bin/python3
 """The queue's management screen: reorder, rename, remove, retry, run now.
 
-``dlqd ui``. The queue already had two screens and neither of them changes
-anything: ``dlqd status`` says what happens next, ``dlqd list`` says where
+``dlq ui``. The queue already had two screens and neither of them changes
+anything: ``dlq status`` says what happens next, ``dlq list`` says where
 everything is. What neither could do is the handful of things that come up once
 an item is *in* the queue and wrong — it should go first, it is called the
 wrong thing, it should not run at all, it failed three nights and deserves
@@ -27,7 +27,7 @@ downloading into; anything finished in ``out/`` is kept, and the screen says
 where it stayed.
 
 A third rule is about *when*: **while the queue is busy nothing may be
-changed.** A firing or a ``dlqd now`` writes into ``work/<name>/`` and hands
+changed.** A firing or a ``dlq now`` writes into ``work/<name>/`` and hands
 the item to ``done/`` when it completes, so moving either underneath it loses
 the download or breaks the archive. Every mutating function starts at
 :func:`busy_problem`, which is checked rather than assumed — the guard lives
@@ -63,7 +63,7 @@ import expire_sched as sched  # noqa: E402  (sibling module, path fixed up above
 import ytq  # noqa: E402  (reachable because expire_sched put its checkout on sys.path)
 import contextlib
 
-#: What a row says is said the same way ``dlqd list`` says it, by calling the
+#: What a row says is said the same way ``dlq list`` says it, by calling the
 #: same functions rather than by respelling them: the state, the progress, the
 #: colour it is worth and the name with its extension dropped. This screen owns
 #: only the *arrangement*, which differs because a cursor needs rows of a fixed
@@ -152,8 +152,8 @@ def _slug_of(name: str) -> str:
     picking it up and putting it where you want it, not by working out what
     integer lives between two others.
 
-    Nothing needs it typed back any more either. ``dlqd now`` and ``dlqd open``
-    are gone from the command line, and ``dlqd path`` takes any unambiguous
+    Nothing needs it typed back any more either. ``dlq now`` and ``dlq open``
+    are gone from the command line, and ``dlq path`` takes any unambiguous
     part of a name, which a slug is.
     """
     parsed = parse_name(name)
@@ -173,7 +173,7 @@ def renumber(name: str, number: int) -> str:
     Not spelled through :func:`ytq.slugify`, which is right for something a
     person typed and wrong here: it truncates at 42 characters, so putting a
     long-titled item first would silently shorten its name as well as move it,
-    and the name is what ``dlqd now`` is given.
+    and the name is what ``dlq now`` is given.
     """
     _, slug = parse_name(name) or (0, name)
     return f"{max(0, min(99999, number)):02d}-{slug}.py"
@@ -427,13 +427,13 @@ def busy_problem() -> str | None:
     Called first by every mutating function in this module rather than by the
     screens that call them, so that the guard cannot be skipped by a caller who
     did not know it was needed. What it guards is not subtle: a firing or a
-    ``dlqd now`` is writing into ``work/<name>/`` and will rename the item into
+    ``dlq now`` is writing into ``work/<name>/`` and will rename the item into
     ``done/`` when it finishes, and moving either underneath it loses the
     download or leaves the archive step renaming a file that is not there.
 
     :func:`ytq.queue_busy` and not the freshness of a progress file, because
     this is the question the *runner* answers with the lock, and a mutation is
-    one of the two things (the other is ``dlqd now``) that is entitled to take
+    one of the two things (the other is ``dlq now``) that is entitled to take
     it. The read-only screens use the progress file precisely because they are
     not entitled to.
     """
@@ -532,7 +532,7 @@ def _move_record(old: str, new: str) -> None:
     """Carry the item's history over to its new name.
 
     The attempts, the bytes spent and — for a finished item — the paths its
-    files were delivered to. Dropping it would cost ``dlqd path`` the only
+    files were delivered to. Dropping it would cost ``dlq path`` the only
     answer it has: once a file is in a folder shared with every other app on
     the phone, nothing can work out which one was ours by looking.
     """
@@ -1252,7 +1252,7 @@ def item_log(name: str) -> Path | None:
     """The newest log this item wrote, or ``None``.
 
     Both spellings are matched: the runner writes ``<date>-<item>.log`` and a
-    ``dlqd now`` writes ``<date>-now-<item>.log``.
+    ``dlq now`` writes ``<date>-now-<item>.log``.
     """
     try:
         found = sorted(sched.LOGS.glob(f"*-{name}.log"))
@@ -1265,7 +1265,7 @@ def log_screen(win, paint: dict, row: dict) -> None:
     """The item's own log for its last night, scrollable.
 
     Not the runner's log, which is the reasoning about the whole queue —
-    ``dlqd logs`` is that. This is the one file that says what *this* download
+    ``dlq logs`` is that. This is the one file that says what *this* download
     was doing when it stopped, which is the question a failed item raises.
     """
     path = item_log(row["name"])
@@ -1276,7 +1276,7 @@ def log_screen(win, paint: dict, row: dict) -> None:
                 "no log under this name",
                 "a rename leaves the earlier ones under the old name — they "
                 "are still in logs/",
-                "dlqd logs is the runner's own reasoning about the queue",
+                "dlq logs is the runner's own reasoning about the queue",
             ],
         )
         return
@@ -1297,7 +1297,7 @@ def file_screen(win, paint: dict, path: Path) -> None:
         ytq.message(win, ["could not read the log", str(exc)])
         return
 
-    # Opened at the end, the way `dlqd logs` and every tail does: a download's
+    # Opened at the end, the way `dlq logs` and every tail does: a download's
     # log is read to find out why it stopped, and that is the last line.
     top = len(text)
     while True:
@@ -1487,7 +1487,7 @@ def run_note(facts: dict) -> list[str]:
 class Firing:
     """The whole-queue run this screen started, if it started one.
 
-    The item screen's ``n`` hands one download to a detached ``dlqd now``; this
+    The item screen's ``n`` hands one download to a detached ``dlq now``; this
     hands the whole queue to a detached runner, which is the same process the
     nightly job fires and takes the same lock. Detached for the same reason:
     the download has to outlive the screen that started it, and the screen has
@@ -1699,7 +1699,7 @@ def _act_log(win, paint, queue, row) -> tuple[str, bool, str]:
 
 
 def _act_now(win, paint, queue, row) -> tuple[str, bool, str]:
-    """Hand the item to a detached ``dlqd now``, exactly as ytq does.
+    """Hand the item to a detached ``dlq now``, exactly as ytq does.
 
     The same spawn, so an interrupted download resumes rather than restarts,
     the item stays in the queue until it finishes, and the nightly window can
@@ -2182,8 +2182,8 @@ def app(win) -> list[str]:
                         f"{sched._short(sched.ROOT)} holds nothing queued, "
                         "failed or done",
                         "ytq queues a video and dlq queues a file URL",
-                        # A bare `dlqd` lands here now, and on an empty queue
-                        # this used to be the whole of it. What a bare `dlqd`
+                        # A bare `dlq` lands here now, and on an empty queue
+                        # this used to be the whole of it. What a bare `dlq`
                         # printed before is one key away instead of gone: the
                         # queue's own screen is what comes next.
                         "next: what tonight would do, and the job",
@@ -2351,7 +2351,7 @@ def _self_test() -> int:
         "40-some-talk.py",
     )
     check("renaming keeps the priority", reslug("60-x.py", "other"), "60-other.py")
-    check("ui is one of dlqd's actions", sched._action(["ui"]), "ui")
+    check("ui is one of dlq's actions", sched._action(["ui"]), "ui")
 
     # ------------------------------------------------------------------ hints
     check("both hint sets answer the same screens", set(HINTS), set(TIGHT_HINTS))
@@ -2364,12 +2364,12 @@ def _self_test() -> int:
         check(f"{name} picks the full hints at 80", hint(name, 80), HINTS[name])
 
     # -------------------------------------------------- the queue's own screen
-    # The screen a bare `dlqd` reaches, and the only one that arms the job,
+    # The screen a bare `dlq` reaches, and the only one that arms the job,
     # runs the whole queue or moves where finished files go. Everything here
     # guards one of two failures: a key that is offered and does nothing, and
     # a figure agreed to that is not the figure spent.
     armed_job = [("job", f"{sched.ARMED}, fires every 15m", "32")]
-    idle_job = [("job", "not armed - dlqd arm", "1;31")]
+    idle_job = [("job", "not armed - dlq arm", "1;31")]
     check("an armed job reads as armed", armed(armed_job), True)
     # The one that would be wrong with `in` instead of `startswith`, and the
     # symptom is an arm key offering to arm what the line above says is armed.
@@ -3226,7 +3226,7 @@ def run() -> int:
     """The screen, with the terminal set up and torn down around it."""
     if not sys.stdout.isatty():
         print(
-            "dlqd ui needs a terminal; dlqd list is the same queue, printed",
+            "dlq ui needs a terminal; dlq list is the same queue, printed",
             file=sys.stderr,
         )
         return 2
@@ -3247,7 +3247,7 @@ def main(argv: list[str] | None = None) -> int:
         return _self_test()
     if argv:
         print(f"usage: {Path(sys.argv[0]).name} [--self-test]", file=sys.stderr)
-        print("       dlqd ui is the same screen", file=sys.stderr)
+        print("       dlq ui is the same screen", file=sys.stderr)
         return 2
     return run()
 

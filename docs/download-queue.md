@@ -8,10 +8,10 @@ morning and never touching the paid reserve.
 The queue lives in `~/dlq/` — this checkout — and its YouTube front end in a
 sibling checkout, `~/ytq/`. Two commands are installable (see
 [Installing](#installing-the-commands)) and then work from any directory:
-`ytq` queues videos, `dlqd` is the queue itself — typed on its own it opens
+`ytq` queues videos, `dlq` is the queue itself — typed on its own it opens
 [the screen](#changing-what-is-queued), which is where the queue is worked on,
-and `dlqd dlq <url>` queues a plain file URL. Without installing, every line
-in these docs also works as `python3 ~/ytq/ytq.py …` — and `dlqd` as
+and `dlq <url>` queues a plain file URL. Without installing, every line
+in these docs also works as `python3 ~/ytq/ytq.py …` — and `dlq` as
 `python3 ~/dlq/expire_sched.py …`.
 
 The checkouts find each other as siblings: each looks beside itself first,
@@ -32,20 +32,20 @@ portal cannot be reached](#when-the-portal-cannot-be-reached).
 |---|---|
 | a video page (YouTube etc.) | `ytq <url>` — see [ytq.md](ytq.md) |
 | no link, just a title | `ytq` and search for it |
-| a direct file URL | `dlqd dlq <url>` |
+| a direct file URL | `dlq <url>` |
 | something more exotic | write an item by hand — `queue/README.md` is the contract |
 
-`dlqd dlq` sizes the file from its response headers (headers only — costs no
+`dlq` sizes the file from its response headers (headers only — costs no
 data), writes the queue item, and prints where the file will land:
 
 ```
-dlqd dlq <url>                    # probe the size, queue it
-dlqd dlq <url> --name x.iso       # choose the saved file name
-dlqd dlq <url> --sha256 <hex>     # verify the file before delivery
-dlqd dlq <url> --probe            # just print size + resume support
-dlqd dlq <url> --expect-bytes N   # server won't state a size: set the
+dlq <url>                    # probe the size, queue it
+dlq <url> --name x.iso       # choose the saved file name
+dlq <url> --sha256 <hex>     # verify the file before delivery
+dlq <url> --probe            # just print size + resume support
+dlq <url> --expect-bytes N   # server won't state a size: set the
                                   # most you are willing to let it cost
-dlqd dlq <url> --again            # queue it even though it is already
+dlq <url> --again            # queue it even though it is already
                                   # queued or already downloaded
 ```
 
@@ -59,7 +59,7 @@ Nothing downloads when you queue — the item just waits for the nightly window.
 ## Installing the commands
 
 Optional — the scripts run fine as `python3 ~/dlq/expire_sched.py`. Installing
-just puts them on PATH as `dlqd` and `ytq` — one install per checkout, since
+just puts them on PATH as `dlq` and `ytq` — one install per checkout, since
 they are separate repos. Neither pyproject declares a dependency (stdlib only;
 yt-dlp is a separate binary on PATH), so nothing but the build backend is ever
 fetched.
@@ -82,12 +82,12 @@ uv tool install --force ~/dlq   # after editing
 ```
 
 An installed copy still works out of `~/dlq/`, not next to itself
-— the queue has to be the one the nightly runner reads, and `dlqd` has to arm
+— the queue has to be the one the nightly runner reads, and `dlq` has to arm
 the runner that lives in the checkout. Both commands anchor there deliberately
-(`ytq._root()` finds it, and `dlqd` takes the same answer rather than its own
+(`ytq._root()` finds it, and `dlq` takes the same answer rather than its own
 location) because the alternative fails without saying so: a non-editable copy
 would queue into its own installed directory, where the runner never looks, and
-`dlqd arm` would register the copy of the runner sitting beside it — which has
+`dlq arm` would register the copy of the runner sitting beside it — which has
 no queue next to it and cannot reach `quota_widget` at all. The symptom would be
 a job firing faithfully every night onto an empty queue.
 
@@ -121,54 +121,54 @@ working.
 ### Fish completions
 
 ```
-ln -s ~/dlq/completions/dlqd.fish ~/.config/fish/completions/
+ln -s ~/dlq/completions/dlq.fish ~/.config/fish/completions/
 ln -s ~/ytq/completions/ytq.fish ~/.config/fish/completions/
 ```
 
 Symlinks rather than copies, so pulling the repo updates them. New shells pick
 them up; `exec fish` in the current one. They complete the subcommands and
-options, and — for `dlqd path` — the download names themselves, each shown
+options, and — for `dlq path` — the download names themselves, each shown
 with its state:
 
 ```
-$ dlqd path <tab>
+$ dlq path <tab>
 40-ubuntu-24-04.py  (queued, 1 GiB here)  60-some-talk.py  (queued)
 ```
 
-That list comes from `dlqd names`, which walks the queue directories and parses
+That list comes from `dlq names`, which walks the queue directories and parses
 nothing, because it runs on every press of the tab key.
 
 ## One-time setup
 
 ```
-dlqd arm
+dlq arm
 ```
 
 Registers the job with Android's scheduler (needs the **Termux:API app**, not
-just the package). It survives reboots and Termux being killed; `dlqd cancel`
+just the package). It survives reboots and Termux being killed; `dlq cancel`
 unregisters it. Both are also `a` and `c` on [the queue
 screen](#the-queue-itself), under the line that says which it currently is. `arm` registers the runner **in the checkout** whether or not
-`dlqd` itself is installed, so re-arm after moving `~/dlq`.
+`dlq` itself is installed, so re-arm after moving `~/dlq`.
 
 ## Checking on it
 
 ```
-dlqd status      # what happens next, and what it turns on
-dlqd list        # every download, and how much of it is here
-dlqd ui          # the same queue, on a screen that can change it — or just: dlqd
-dlqd path NAME   # where a finished download landed
-dlqd logs        # last 40 lines of the runner log
-dlqd run-now     # run the whole queue now, without waiting for the window
-dlqd run-now --blind   # ...with no portal reading, on mobile data
+dlq status      # what happens next, and what it turns on
+dlq list        # every download, and how much of it is here
+dlq ui          # the same queue, on a screen that can change it — or just: dlq
+dlq path NAME   # where a finished download landed
+dlq logs        # last 40 lines of the runner log
+dlq run-now     # run the whole queue now, without waiting for the window
+dlq run-now --blind   # ...with no portal reading, on mobile data
 ```
 
 All of these except `path` are on the screen too, under `s` — see [The queue
 itself](#the-queue-itself). The command line is what is left for the things a
-screen cannot do: `path` prints a path and nothing else, so `cd (dlqd path
-ubuntu)` works; and a `dlqd` with no terminal to draw on — in a pipe, or a
+screen cannot do: `path` prints a path and nothing else, so `cd (dlq path
+ubuntu)` works; and a `dlq` with no terminal to draw on — in a pipe, or a
 script — prints the status screen rather than opening anything.
 
-`dlqd status` answers "is it going to download tonight, and what". It leads
+`dlq status` answers "is it going to download tonight, and what". It leads
 with that answer and then shows the working:
 
 ```
@@ -190,7 +190,7 @@ queue (2)
   60-some-talk
     -  0 B/≤505 MiB
 
-  3 done, 1 failed - dlqd list
+  3 done, 1 failed - dlq list
 
 job       armed, fires every 15m
 last run
@@ -217,10 +217,10 @@ the last download actually managed, which is what the runner sizes each slice
 against. `try 2/3` on an item means one night already failed and it has two
 left before it is set aside for you.
 
-`dlqd status` is read-only and takes no lock, so it answers while a firing is
+`dlq status` is read-only and takes no lock, so it answers while a firing is
 in progress. It exits non-zero when it prints a `BROKEN` line.
 
-`dlqd list` is the "where is everything" answer — queued, failed and done in
+`dlq list` is the "where is everything" answer — queued, failed and done in
 that order, with what is on the disk against what it is going to be:
 
 ```
@@ -246,7 +246,7 @@ can start it again. To download it a second time, queue it again.
 It lays itself out to the terminal it is in. On a phone in portrait the
 description goes and, if the names are long, each download takes two lines
 rather than having its name clipped — the name is what you type back at
-`dlqd path`, so it is the last thing to lose room. Both lines of a download sit
+`dlq path`, so it is the last thing to lose room. Both lines of a download sit
 at the same indent and a blank line separates one download from the next,
 since a phone loses two columns to every level of indent and the eye reads the
 gap anyway:
@@ -264,13 +264,13 @@ queued (2)
 or the priority number (`40`). Anything matching two downloads is refused with
 both listed.
 
-`dlqd path` prints only the path, so `cd (dlqd path ubuntu)` works, and exits
+`dlq path` prints only the path, so `cd (dlq path ubuntu)` works, and exits
 non-zero if the download has not finished — it still prints where it is going
 to land. For one that finished and whose file has since gone, it prints where
 it *was* delivered and exits non-zero, because that is the only record of where
 it went and it is still the answer to the question.
 
-`dlqd logs` does the same thing to the runner's log: on a phone the date is
+`dlq logs` does the same thing to the runner's log: on a phone the date is
 lifted off the lines and printed once above them — but only when every line on
 the screen really is that one day, since the queue runs across midnight — and a
 long line is wrapped with its continuations indented rather than left to break
@@ -284,12 +284,12 @@ nights (you get a notification either way something needs you).
 ## Changing what is queued
 
 ```
-dlqd ui     # or just: dlqd
+dlq ui     # or just: dlq
 ```
 
-`dlqd` with nothing after it opens this screen. In a pipe or a script — no
-terminal to draw on — it prints `dlqd status` instead, which is what a bare
-`dlqd` has always done.
+`dlq` with nothing after it opens this screen. In a pipe or a script — no
+terminal to draw on — it prints `dlq status` instead, which is what a bare
+`dlq` has always done.
 
 Everything that changes the queue is on this one screen: reorder, rename,
 remove, put a failed download back, give it its nights back, download one now,
@@ -404,7 +404,7 @@ first one is a fact.
 
 ### The queue itself
 
-`s` on the listing opens the queue's own screen: the whole of `dlqd status`,
+`s` on the listing opens the queue's own screen: the whole of `dlq status`,
 scrolling, with the keys that act on the queue as a whole underneath it.
 
 | On the queue | |
@@ -415,7 +415,7 @@ scrolling, with the keys that act on the queue as a whole underneath it.
 | `w` | where finished downloads go, and change either of them |
 | `l` | the runner's own log |
 
-A bare `dlqd` on an empty queue comes here, because "nothing is queued" is only
+A bare `dlq` on an empty queue comes here, because "nothing is queued" is only
 half the answer — whether the job is armed and what tonight would have spent is
 the other half.
 
@@ -425,7 +425,7 @@ asking it once a second is not watching, it is hammering. What *is* live is the
 download at the bottom, which is read off a local file, and the figures are
 read again the moment a run of yours ends.
 
-**`n` here is `dlqd run-now`, and it means now.** The nightly window is a
+**`n` here is `dlq run-now`, and it means now.** The nightly window is a
 schedule, not a permission: pressing it ignores the window exactly as the item
 screen's `n` does, and everything else stays — the 100 MB floor, the per-item
 caps, and the portal reading the whole budget is derived from. With the portal
@@ -438,11 +438,11 @@ downloaded is kept and the nightly window carries on from there.
 ## Where downloads go
 
 ```
-dlqd dest                        # show all three, and where they came from
-dlqd dest video ~/storage/movies # where ytq puts finished videos
-dlqd dest audio ~/storage/music  # where ytq puts audio-only picks
-dlqd dest file  ~/storage/downloads
-dlqd dest video default          # put the built-in default back
+dlq dest                        # show all three, and where they came from
+dlq dest video ~/storage/movies # where ytq puts finished videos
+dlq dest audio ~/storage/music  # where ytq puts audio-only picks
+dlq dest file  ~/storage/downloads
+dlq dest video default          # put the built-in default back
 ```
 
 Or `w` on [the queue screen](#the-queue-itself), which shows all three, says
@@ -461,19 +461,19 @@ offers to play.
 **On Termux all three default to Android's own Downloads**
 (`/storage/emulated/0/Download`) — the folder the Downloads app lists and the
 media scanner indexes, and one that survives Termux being uninstalled. That
-needs `termux-setup-storage` to have been run once; until it has, `dlqd dest`
+needs `termux-setup-storage` to have been run once; until it has, `dlq dest`
 says so rather than letting you find out after the data is spent. Anywhere
 else — the container on zero — the default stays the queue's own `out/`.
 
 A setting is read **when the file is delivered**, not when it was queued, so
 changing one moves everything already waiting in the queue as well — including
 the audio ones, which is the point of them being a kind rather than a folder
-chosen once. For a one-off, `ytq --dest DIR` and `dlqd dlq --dest DIR` write an
+chosen once. For a one-off, `ytq --dest DIR` and `dlq --dest DIR` write an
 absolute path into that item instead, and that wins over the kind.
 
 Finished files land directly in the folder, named as they were downloaded. A
 name already taken gets Android's own suffix — `report (2).pdf` — and nothing
-is ever overwritten. `dlqd path NAME` tells you where one went; the queue keeps
+is ever overwritten. `dlq path NAME` tells you where one went; the queue keeps
 a record, because once a file is in a folder shared with every other app on the
 phone nothing can work out which one was yours by looking.
 
@@ -517,7 +517,7 @@ says so:
 data
   no reading, so nothing can be spent
   no credentials: set zwana_username and zwana_password in ~/zwana-quota/.env
-  dlqd run-now --blind spends mobile data instead
+  dlq run-now --blind spends mobile data instead
 ```
 
 That last line is the way through, and it is the same bargain the screen's
@@ -526,8 +526,8 @@ queue screen](#the-queue-itself), which asks the same single question with the
 same figure in it; on the command line:
 
 ```
-dlqd run-now --blind        # run the queue with no portal reading
-dlqd run-now --blind --yes  # without being asked to confirm
+dlq run-now --blind        # run the queue with no portal reading
+dlq run-now --blind --yes  # without being asked to confirm
 ```
 
 ```
@@ -571,12 +571,12 @@ instead of one.
 - Guarantees, whatever an item does: ≥100 MB of today's data is left, nothing
   runs past 00:00 UTC, and the paid reserve is never spent. All three are
   measured against the portal, so all three are off for the two things that
-  deliberately spend paid data and say so first — `dlqd ui`'s `n` and
-  `dlqd run-now --blind`.
+  deliberately spend paid data and say so first — `dlq ui`'s `n` and
+  `dlq run-now --blind`.
 
 ## When something looks wrong
 
-- `dlqd status` — start here. Its first line is what the next firing would do
+- `dlq status` — start here. Its first line is what the next firing would do
   and why, and the rest is what that turned on: the budget, the window, every
   item's progress and attempts, why any item was rejected, and whether the job
   is still registered. (`python3 expire_runner.py --status` draws the same
@@ -585,7 +585,7 @@ instead of one.
 - `logs/runner.log` is the runner's reasoning; `logs/<date>-<item>.log` is one
   item's own output for that night.
 - An item in `failed/` kept its logs and its attempt history in `state.json` —
-  diagnose before re-queueing. `dlqd ui` reads that item's log with `l` and puts
+  diagnose before re-queueing. `dlq ui` reads that item's log with `l` and puts
   it back with `u`, which also clears the three spent nights; by hand it is a
   move back into `queue/`, and the attempts have to be cleared too or the first
   firing to touch it gives up on it again.

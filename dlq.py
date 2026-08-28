@@ -13,10 +13,10 @@ cost.
 
 Usage::
 
-    dlqd dlq <url>                    # probe the size, queue it
-    dlqd dlq <url> --name x.iso       # choose the saved file name
-    dlqd dlq <url> --probe            # print size and resume support only
-    dlqd dlq <url> --expect-bytes N   # server states no size: set the cap
+    dlq <url>                    # probe the size, queue it
+    dlq <url> --name x.iso       # choose the saved file name
+    dlq <url> --probe            # print size and resume support only
+    dlq <url> --expect-bytes N   # server states no size: set the cap
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # ytq lives in its own checkout: $YTQ_HOME, a clone beside this one, or
 # ~/ytq — the same resolution expire_sched uses, spelled here too because
-# `dlqd dlq` is not the only door (python3 dlq.py runs this file directly).
+# `dlq` is not the only door (python3 dlq.py runs this file directly).
 _ytq = os.environ.get("YTQ_HOME")
 _beside = Path(__file__).resolve().parent.parent / "ytq"
 sys.path.insert(1, str(
@@ -394,17 +394,17 @@ def _self_test() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="dlqd dlq",
+        prog="dlq",
         description=__doc__.split("\n")[0],
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=textwrap.dedent("""\
             examples:
-              dlqd dlq https://releases.ubuntu.com/24.04/ubuntu-24.04-desktop-amd64.iso
-              dlqd dlq https://x.example/build --name build.tar.gz --sha256 <hex>
-              dlqd dlq https://x.example/feed --expect-bytes 50000000
+              dlq https://releases.ubuntu.com/24.04/ubuntu-24.04-desktop-amd64.iso
+              dlq https://x.example/build --name build.tar.gz --sha256 <hex>
+              dlq https://x.example/feed --expect-bytes 50000000
 
-            for video pages use ytq; the queue itself is dlqd — bare for
-            the screen, or dlqd status. docs: ~/dlq/docs/download-queue.md"""),
+            for video pages use ytq; the queue itself is dlq — bare for
+            the screen, or dlq status. docs: ~/dlq/docs/download-queue.md"""),
     )
     parser.add_argument("url", nargs="?", help="the file to download")
     parser.add_argument("--name", help="saved file name (default: from the URL)")
@@ -421,7 +421,7 @@ def main(argv: list[str] | None = None) -> int:
         "--dest",
         metavar="DIR",
         help="put this one somewhere other than the configured file directory "
-        "(dlqd dest sets that)",
+        "(dlq dest sets that)",
     )
     parser.add_argument(
         "--expect-bytes",

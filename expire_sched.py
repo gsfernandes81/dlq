@@ -39,9 +39,9 @@ app every ``termux-*`` call hangs rather than failing.
 
 Usage::
 
-    dlqd [status|list|ui|path NAME|dest|queue|logs|run-now|arm|cancel]
+    dlq [status|list|ui|path NAME|dest|queue|logs|run-now|arm|cancel]
 
-``dlqd`` with nothing after it is ``dlqd ui`` — see :func:`default_action`,
+``dlq`` with nothing after it is ``dlq ui`` — see :func:`default_action`,
 which falls back to ``status`` when there is no terminal to draw on.
 
 ``ui`` is where the queue is *changed* — reordered, renamed, retried, removed,
@@ -51,7 +51,7 @@ easier to do to a download you are looking at than to a name you have to type
 correctly first. What is left on the command line is the three read-only
 answers, the settings and the job.
 
-``dlqd run-now --blind`` is the answer to ``ic.zwana.io`` being unreachable —
+``dlq run-now --blind`` is the answer to ``ic.zwana.io`` being unreachable —
 the phone on mobile data, or the portal down. The nightly guards are all read
 off that portal, so a blind run has none of them and spends paid data instead;
 it says how much and asks first, exactly as the screen's ``n`` does for one
@@ -60,11 +60,11 @@ is also the one run nothing interrupts for the clock, since the deadlines all
 belong to an allowance it is not spending, so it runs in the foreground and
 ctrl-c is what stops it.
 
-``dlqd`` is this file installed on PATH (see ``pyproject.toml``); running
+``dlq`` is this file installed on PATH (see ``pyproject.toml``); running
 ``python3 expire_sched.py …`` from the checkout does exactly the same thing.
 
 ``NAME`` is name-ish: any unambiguous part of an item's file name, or its
-priority number. :func:`match` decides, and ``dlqd names`` prints the same list
+priority number. :func:`match` decides, and ``dlq names`` prints the same list
 the fish completions offer.
 """
 
@@ -283,7 +283,7 @@ def do_arm() -> tuple[bool, str]:
 
 
 def arm() -> None:
-    """``dlqd arm``: register the job, or stop with the reason it did not."""
+    """``dlq arm``: register the job, or stop with the reason it did not."""
     worked, said = do_arm()
     if not worked:
         sys.exit(f"error: {said}")
@@ -303,7 +303,7 @@ def do_cancel() -> tuple[bool, str]:
 
 
 def cancel() -> None:
-    """``dlqd cancel``: unregister it, or stop with the reason it did not."""
+    """``dlq cancel``: unregister it, or stop with the reason it did not."""
     worked, said = do_cancel()
     if not worked:
         sys.exit(f"error: {said}")
@@ -431,7 +431,7 @@ def _runner():
     """The runner module, imported from the checkout rather than from beside us.
 
     Imported lazily, and only by the paths that need an item's declared cap:
-    everything else here answers from the filesystem, and ``dlqd names`` is run
+    everything else here answers from the filesystem, and ``dlq names`` is run
     on every press of the tab key.
 
     The ``__main__`` check is for the other direction: ``expire_runner
@@ -616,7 +616,7 @@ def _lost(noted: list[Path]) -> str:
     So the distinction is drawn here, once, and everything that acts on a
     missing file acts on this answer rather than on ``files == []``.
     :func:`_readable` is what makes the difference between the two an
-    observation rather than an assumption, which is what lets ``dlqd ui``
+    observation rather than an assumption, which is what lets ``dlq ui``
     delete on the strength of it.
     """
     return "gone" if all(_readable(path.parent) for path in noted) else "away"
@@ -625,7 +625,7 @@ def _lost(noted: list[Path]) -> str:
 def _state_items() -> dict:
     """The runner's per-item records, read without importing the runner.
 
-    ``dlqd names`` runs on every press of the tab key and must not pay for
+    ``dlq names`` runs on every press of the tab key and must not pay for
     ``quota_widget``; this is the one field it needs out of the state file.
     """
     try:
@@ -899,7 +899,7 @@ def compose_list(rows: list[dict], width: int, paint) -> list[tuple[str, str]]:
     * **narrow** — the description goes. It is mostly the title again, and the
       name is already a slug of the title.
     * **tight** — two lines, the name on one and its figures indented beneath.
-      The name is what has to be typed back at ``dlqd path``, so it is the last
+      The name is what has to be typed back at ``dlq path``, so it is the last
       cell to give up room rather than the first: losing its tail makes two
       downloads look like the same one. It is still clipped if it alone is
       wider than the terminal, which nothing can help.
@@ -1049,7 +1049,7 @@ def _running_now(names: list[str]) -> str:
     """The item being downloaded at this second, or ``""``.
 
     Measured from the freshness of the item's own progress file, so it catches
-    a ``dlqd now`` in another terminal as readily as a nightly firing — both
+    a ``dlq now`` in another terminal as readily as a nightly firing — both
     write it, and neither is visible in the job registration.
     """
     for name in names:
@@ -1098,7 +1098,7 @@ def compose_status(
     * the verdict, in one line: what happens next, and when;
     * the money, as the derivation it is: what is left, what expires, what is
       held back, and therefore what tonight may spend;
-    * the queue, in the shape and with the figures ``dlqd list`` uses, because
+    * the queue, in the shape and with the figures ``dlq list`` uses, because
       two screens disagreeing about a download's progress is worse than either
       of them being wrong;
     * the machinery — job, last firing, root — last, since it is what you read
@@ -1284,7 +1284,7 @@ def _labelled(
 
 
 def _queue_rows(facts: dict, width: int, paint) -> list[tuple[str, str]]:
-    """The queued items, laid out as ``dlqd list`` lays out the same downloads.
+    """The queued items, laid out as ``dlq list`` lays out the same downloads.
 
     Same shape and the same two helpers for the figures, so the two screens
     cannot disagree about how far in a download is. What this one adds is the
@@ -1381,7 +1381,7 @@ def _queue_rows(facts: dict, width: int, paint) -> list[tuple[str, str]]:
             out.append(("", ""))
         titled = f"  {_fit(_display_name(item['name']), width - 2)}"
         out.append((titled, titled))
-        # Word for word what `dlqd list` calls it, and the reason in full: an
+        # Word for word what `dlq list` calls it, and the reason in full: an
         # item is rejected for something about the file, and the reason is the
         # only thing on either screen that says what to do about it. It sits at
         # the download's own indent — the blank line above is what says it
@@ -1390,7 +1390,7 @@ def _queue_rows(facts: dict, width: int, paint) -> list[tuple[str, str]]:
         for line in _wrap(said, width - 2):
             out.append((f"  {line}", f"  {paint(line, '1;31')}"))
 
-    # Everything that is not queued lives in `dlqd list`, and saying how much of
+    # Everything that is not queued lives in `dlq list`, and saying how much of
     # it there is stops this screen reading as the whole story.
     elsewhere = [where for where, _ in _paths() if where != "queued"]
     if elsewhere:
@@ -1525,7 +1525,7 @@ def show_dest(argv: list[str]) -> int:
 def set_dest(kind: str, value: str) -> tuple[bool, list[str]]:
     """Point *kind* at *value*, or at its default. ``(it worked, what to say)``.
 
-    The deciding half of ``dlqd dest``, split from the printing half because
+    The deciding half of ``dlq dest``, split from the printing half because
     the screen sets destinations too and a second implementation of "is this
     directory usable" is a second answer to it. Nothing here prints or exits;
     what would have gone to stderr comes back as the last line.
@@ -1573,9 +1573,9 @@ def set_dest(kind: str, value: str) -> tuple[bool, list[str]]:
 def show_path(row: dict) -> int:
     """Print where a download is.
 
-    Only the path goes to stdout, so ``cd (dlqd path x)`` works and the exit
+    Only the path goes to stdout, so ``cd (dlq path x)`` works and the exit
     code says whether there is anything there; anything a human needs to know
-    besides the path goes to stderr. Opening the file is ``dlqd ui``'s ``o``,
+    besides the path goes to stderr. Opening the file is ``dlq ui``'s ``o``,
     which is the screen that already has the download picked.
     """
     files = row["files"]
@@ -1615,7 +1615,7 @@ def show_path(row: dict) -> int:
 def _open(target: Path, quiet: bool = False) -> int:
     """Hand the file to Android, or to a desktop if this is not the phone.
 
-    *quiet* is for ``dlqd ui``, which calls this from inside curses: an opener
+    *quiet* is for ``dlq ui``, which calls this from inside curses: an opener
     writing to the terminal there draws over a screen it does not own, and
     nothing redraws it away. The caller reports the exit code instead.
     """
@@ -1762,7 +1762,7 @@ def queue_run_argv(blind: bool) -> list[str]:
 def run_blind(assume_yes: bool = False) -> int:
     """Fire the whole queue with no portal reading, on ordinary mobile data.
 
-    What ``dlqd now`` is for one item, this is for the queue, and for the same
+    What ``dlq now`` is for one item, this is for the queue, and for the same
     reason: every nightly guard is derived from ``ic.zwana.io`` — spend the
     allowance that is expiring, leave 100 MB of it behind, stay out of the paid
     reserve — and when the phone is on mobile data there is no portal to derive
@@ -1789,7 +1789,7 @@ def run_blind(assume_yes: bool = False) -> int:
     total = runner.blind_budget(items, runner.load_state())
     paint = _paint()
     narrow = _width() < WIDE
-    # The same two-column shape `dlqd now` uses, and the same rule about which
+    # The same two-column shape `dlq now` uses, and the same rule about which
     # words survive a narrow screen: "of mobile data" is the whole warning.
     label = 5 if narrow else 12
     queued = ("queue" if narrow else "the queue").ljust(label)
@@ -1862,7 +1862,7 @@ def _run_item(runner, row: dict, slice_bytes: int) -> int:
         print("ctrl-c stops it; what is downloaded is kept and resumes")
 
     with log_path.open("a") as sink:
-        sink.write(f"\n===== {stamp()} dlqd now slice={slice_bytes} =====\n")
+        sink.write(f"\n===== {stamp()} dlq now slice={slice_bytes} =====\n")
         sink.flush()
         # Deliberately no setsid: the item stays in this terminal's foreground
         # process group, so ctrl-c reaches it directly and it stops itself the
@@ -2199,7 +2199,7 @@ def _self_test() -> int:
 
     # The word the screen reads to decide whether the job is registered. Both
     # ends: "armed, fires every 15m" says yes, and every way of saying no has
-    # to fail to start with it — "not armed - dlqd arm" is the one that would
+    # to fail to start with it — "not armed - dlq arm" is the one that would
     # read as a yes to a check written with `in` instead of `startswith`.
     check(
         "the armed row says so first",
@@ -2207,7 +2207,7 @@ def _self_test() -> int:
         True,
     )
     for said in (
-        "not armed - dlqd arm",
+        "not armed - dlq arm",
         "not armed here; the nightly job is the phone's",
     ):
         check(f"{said!r} does not read as armed", said.startswith(ARMED), False)
@@ -2215,11 +2215,11 @@ def _self_test() -> int:
     check("an unknown action is refused", _action(["nonsense"]), None)
     check("a bare command opens the screen", default_action(True), "ui")
     # The historical default, and still the one anything without a terminal
-    # gets: `dlqd | less`, an ssh command with no tty, a line in a script. A
+    # gets: `dlq | less`, an ssh command with no tty, a line in a script. A
     # curses app in any of those is a usage error where an answer used to be.
     check("off a terminal it is the status screen", default_action(False), "status")
     # Neither spelling of the default may be an action that *does* something:
-    # the failure this pins is a bare `dlqd` that arms the job or spends data.
+    # the failure this pins is a bare `dlq` that arms the job or spends data.
     for interactive in (True, False):
         check(
             f"the default changes nothing (tty={interactive})",
@@ -2237,12 +2237,12 @@ def _self_test() -> int:
     )
     # The one command in here that nothing types and everything spawns. It is
     # out of the usage block and out of the completions, and it still has to
-    # dispatch: ytq's n key and dlqd ui's are both `dlqd now NAME --yes`.
+    # dispatch: ytq's n key and dlq ui's are both `dlq now NAME --yes`.
     check("now is still dispatchable", _action(["now", "x"]), "now")
     check("but it is not offered as a command", "now" in ACTIONS, False)
     check("and open is gone; the screen opens files", "open" in ACTIONS, False)
 
-    # The runner imports quota_widget from the zwana-quota checkout, so `dlqd
+    # The runner imports quota_widget from the zwana-quota checkout, so `dlq
     # status` only works where that checkout is reachable — which is exactly
     # what root_problem() reports when it is not.
     check(
@@ -2253,7 +2253,7 @@ def _self_test() -> int:
 
     # The runner is the one that decides where work/, out/, done/ and the lock
     # are. These are spelled again here so a listing costs no import, and this
-    # is what stops the two spellings drifting into a `dlqd list` that reports
+    # is what stops the two spellings drifting into a `dlq list` that reports
     # an empty queue while the runner is downloading into a different tree.
     runner = _runner()
     check("the imported runner is the checkout's", runner.ROOT, ROOT)
@@ -2490,7 +2490,7 @@ def _self_test() -> int:
                     max((len(line) for line in composed), default=0),
                     width,
                 )
-                # The name is what has to be typed back at `dlqd now`, so it is
+                # The name is what has to be typed back at `dlq now`, so it is
                 # the last cell to give up room and never the first: a clipped
                 # one makes two downloads look like the same download.
                 check(
@@ -2725,7 +2725,7 @@ def _self_test() -> int:
                     True,
                 )
             with _quiet() as (out, _):
-                # Non-zero, because `cp (dlqd path x) .` must not quietly copy
+                # Non-zero, because `cp (dlq path x) .` must not quietly copy
                 # nothing; the path itself is still printed, to say where.
                 check(
                     "an unfinished download has no path yet",
@@ -2813,7 +2813,7 @@ def _self_test() -> int:
                     )
 
                 # Every destination the runner knows has to have a command
-                # named against it, or `dlqd dest` and the screen both raise a
+                # named against it, or `dlq dest` and the screen both raise a
                 # KeyError the moment somebody adds a kind — which is exactly
                 # what adding `audio` on 2026-08-28 would have done.
                 check(
@@ -2902,7 +2902,6 @@ HELP = (
     ("ui", "change it: reorder, rename, remove, retry, download now"),
     ("path NAME", "where a finished download landed"),
     ("dest", "show or set where finished downloads are put"),
-    ("dlq URL", "queue a plain file URL (dlqd dlq --help has the options)"),
     ("queue", "just the queued item files"),
     ("logs", "last 40 lines of the runner log"),
     ("run-now", "run the whole queue now; --blind if the portal is unreachable"),
@@ -2918,15 +2917,15 @@ NAMED = ("path", "now")
 #:
 #: ``names`` is shell completion's own entry point, a machine-readable spelling
 #: of ``list``. ``now`` is the machine interface between the screens and the
-#: runner: ``ytq``'s ``n`` key and ``dlqd ui``'s both spawn ``dlqd now NAME
+#: runner: ``ytq``'s ``n`` key and ``dlq ui``'s both spawn ``dlq now NAME
 #: --yes`` detached, because a download has to outlive the screen that started
 #: it and the runner's lock has to be taken by whatever is downloading. The
 #: asking that ``--yes`` skips happened on the screen, which is also where the
-#: reachability of the portal is put in front of someone; a bare ``dlqd now``
+#: reachability of the portal is put in front of someone; a bare ``dlq now``
 #: typed at a shell would ask a worse version of the same question.
 HIDDEN = ("names", "now")
 
-#: ``--now`` was asked for as an option and reads as one; ``dlqd`` has no
+#: ``--now`` was asked for as an option and reads as one; ``dlq`` has no
 #: options, only actions, so it is one of those wearing the other's clothes.
 ALIASES = {"--now": "now", "--list": "list"}
 
@@ -2934,7 +2933,7 @@ ALIASES = {"--now": "now", "--list": "list"}
 def _me() -> str:
     """This command as it was invoked.
 
-    ``dlqd`` on PATH and ``expire_sched.py`` in the checkout — printing the
+    ``dlq`` on PATH and ``expire_sched.py`` in the checkout — printing the
     other one sends people to the wrong place.
 
     The exceptions are the other front ends drawing this module's screens:
@@ -2947,21 +2946,21 @@ def _me() -> str:
     without having to be listed here.
     """
     name = Path(sys.argv[0]).name
-    if name and name in (Path(__file__).name, "dlqd"):
+    if name and name in (Path(__file__).name, "dlq"):
         return name
-    return "dlqd" if shutil.which("dlqd") else Path(__file__).name
+    return "dlq" if shutil.which("dlq") else Path(__file__).name
 
 
 def default_action(interactive: bool | None = None) -> str:
-    """What a bare ``dlqd`` does: open the screen.
+    """What a bare ``dlq`` does: open the screen.
 
     The screen is where the queue is worked on, so typing the command with
     nothing after it lands there rather than on a page of figures — and every
     read-only answer is a key away from it, which is not true the other way
     round.
 
-    Off a terminal it is ``status`` instead, which is what a bare ``dlqd``
-    always did. That is not a nicety: ``dlqd | less``, an ssh command with no
+    Off a terminal it is ``status`` instead, which is what a bare ``dlq``
+    always did. That is not a nicety: ``dlq | less``, an ssh command with no
     tty, a line in a script — all of those used to print the status screen, and
     curses in any of them is a usage error where there used to be an answer.
     The default may never be an action that *does* something either; that is
@@ -3009,6 +3008,7 @@ def usage() -> int:
         print(line.rstrip(), file=sys.stderr)
     print("", file=sys.stderr)
     print("no command: the screen", file=sys.stderr)
+    print("a URL: queue it as a direct file download", file=sys.stderr)
     print("NAME: part of a name, or its number", file=sys.stderr)
     print("docs: ~/dlq/docs/download-queue.md", file=sys.stderr)
     return 2
@@ -3024,6 +3024,15 @@ def main(argv: list[str] | None = None) -> int:
     # Pulled out before the action is read, so --yes works on either side of it.
     assume_yes = "--yes" in argv
     argv = [arg for arg in argv if arg != "--yes"]
+
+    # A URL is the queue ask itself — `dlq <url>` queues a direct file
+    # download, uniform with `ytq <url>`. Routed before the verbs so a verb
+    # can never shadow a URL (no verb contains "://"). The queuer keeps its
+    # own module (dlq.py, its own flags and self-test); this is only the door.
+    if argv and "://" in argv[0]:
+        import dlq
+
+        return dlq.main(argv)
 
     action = _action(argv)
     rest = argv[1:]
@@ -3054,19 +3063,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: {problem}", file=sys.stderr)
             return 1
         # Imported here and not at the top: this is the only action that needs
-        # curses, and `dlqd names` runs on every press of the tab key.
+        # curses, and `dlq names` runs on every press of the tab key.
         import expire_ui
 
         return expire_ui.run()
     elif action == "dest":
         return show_dest(rest)
-    elif action == "dlq":
-        # The plain-URL queuer, merged on 2026-08-28: one command owns the
-        # queue. The module keeps its own name and its own self-test; this
-        # is only the door.
-        import dlq
-
-        return dlq.main(rest)
     elif action == "cancel":
         cancel()
     elif action == "logs":

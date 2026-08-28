@@ -10,17 +10,19 @@ spending allowance that would expire anyway, and never more.
 Modules find the sibling checkouts as checkouts, never as installed packages:
 `$EXPIRE_HOME` / `$YTQ_HOME` / `$ZWANA_HOME` first, then a clone beside this
 repo, then `~/<name>`. `expire_sched._zwana_root` predicts the runner's
-resolution so `dlqd status` can name a missing checkout instead of letting an
+resolution so `dlq status` can name a missing checkout instead of letting an
 import traceback.
 
 Decisions that travel with this code — each was arrived at the hard way:
 
-- **`dlqd` typed on its own opens the screen** — `default_action`, whose other
+- **`dlq` typed on its own opens the screen** — `default_action`, whose other
   half is the check to keep: with no terminal (a pipe, a script, ssh with no
-  tty) it is `status`, which is what a bare `dlqd` always printed.
-- **`dlqd dlq` is the plain-URL queuer** (2026-08-28, was the `dlq` command).
-  `dlq.py` keeps its own name, module and self-test; the verb in
-  `expire_sched.main` is only the door.
+  tty) it is `status`, which is what a bare `dlq` always printed.
+- **`dlq <url>` queues a direct file download**, uniform with `ytq <url>`
+  (2026-08-28; it was a separate `dlq` command, then briefly a verb). A URL
+  is routed before the verbs — no verb contains `://` — and `dlq.py` keeps
+  its own module, flags and self-test; the dispatch in `expire_sched.main`
+  is only the door.
 - **The screen is the whole queue.** Every verb that lives at both ends is
   **one function called by both** — `do_arm`, `do_cancel`, `set_dest`,
   `queue_run_argv` — because a screen and a command that disagree about
@@ -33,7 +35,7 @@ Decisions that travel with this code — each was arrived at the hard way:
   the download is the runner *unwinding* — `run_item` kills the item's tree on
   the way past — and only an interrupt does that. SIGTERM leaves yt-dlp
   spending data with nothing watching it.
-- **`dlqd run-now --blind`** is the bargain when `ic.zwana.io` cannot be
+- **`dlq run-now --blind`** is the bargain when `ic.zwana.io` cannot be
   reached at all: every guard the runner carries is a portal figure, so a
   blind run has none and is bounded by what the items declared
   (`blind_budget`, called by the front end rather than re-derived). **Nothing
@@ -41,11 +43,11 @@ Decisions that travel with this code — each was arrived at the hard way:
   the same bytes again; `NO_DEADLINE` is the one spelling of "no stop time".
   A blind run that finds the portal up is an ordinary run with the floor
   intact.
-- **`dlqd status` leads with the verdict**, and the verdict is
+- **`dlq status` leads with the verdict**, and the verdict is
   `expire_runner.gate()` — the same function the firing gates on, so a screen
   saying "waiting for the window" cannot be a night the runner stopped for
   some other reason. The check to keep pins the *order* the gate answers in.
-- **`dlqd ui` is the only thing in the queue that changes anything**, and an
+- **`dlq ui` is the only thing in the queue that changes anything**, and an
   item is *four* things — the file in `queue/`, the partial in `work/<item>/`,
   anything finished in `out/<item>/`, and its record in `state.json`.
   `expire_ui.belongings` is the only place that decides that; every move and
@@ -63,13 +65,13 @@ Decisions that travel with this code — each was arrived at the hard way:
   the portal is on the vessel's network, so it answering *is* "on vessel
   wifi".
 - **Nothing is queued twice** — items record `# SOURCE:` and `ytq.write_item`
-  is the one door that refuses a duplicate; `dlqd dlq` goes through it too.
-- **Destinations**: `dlqd dest` holds them; the item always downloads into
+  is the one door that refuses a duplicate; `dlq` goes through it too.
+- **Destinations**: `dlq dest` holds them; the item always downloads into
   `out/<item>/` and the *runner* moves it at delivery (`shutil.move`, never a
   rename — shared storage is a different filesystem), so an unreachable
   destination leaves the file safe.
 - **Both commands anchor to the checkout, not `__file__`** — `ytq._root()`
-  resolves the queue root (this repo) and `dlqd` takes the same answer, so an
+  resolves the queue root (this repo) and `dlq` takes the same answer, so an
   installed copy still manages the real queue; the alternative is a nightly
   job firing faithfully onto an empty queue, saying nothing. The Installing
   section of `docs/download-queue.md` explains it.

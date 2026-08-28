@@ -11,11 +11,10 @@ dependencies = []
 
 [project.scripts]
 # The queue's one command: the screen when called bare on a terminal, status
-# off one, and every verb — including `dlqd dlq`, the plain-URL queuer that
-# used to be a command of its own. It resolves the queue root through
-# ytq._root rather than trusting __file__, so an installed copy still manages
-# the real queue.
-dlqd = "expire_sched:main"
+# off one, every verb, and `dlq <url>` — the plain-URL queue ask, uniform
+# with `ytq <url>`. It resolves the queue root through ytq._root rather than
+# trusting __file__, so an installed copy still manages the real queue.
+dlq = "expire_sched:main"
 
 [build-system]
 requires = ["hatchling"]

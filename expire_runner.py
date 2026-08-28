@@ -47,7 +47,7 @@ spend against, so the three guarantees above have nothing to stand on and are
 paid mobile data, and what bounds it is what the queue itself declared. Each
 item is still capped at its own ``EXPECT_BYTES``, which is a cap enforced
 against it rather than a promise believed, so the queue's whole exposure is the
-sum of those — the figure ``dlqd run-now --blind`` says out loud and asks about
+sum of those — the figure ``dlq run-now --blind`` says out loud and asks about
 before anything starts.
 
 Two things follow from there being no expiring grant to land inside, and both
@@ -86,8 +86,8 @@ its order wrong leaves both plausible: the screen would say something true of
 most nights, just not the reason this one is quiet.
 
 ``ytdl_item.py --self-test`` (29 checks) covers the byte metering, which is what
-decides when a slice stops. ``ytq``, ``dlq`` and ``dlqd`` have their own
-(137, 23 and 231); ``dlqd``'s cover the path anchoring and the two screens,
+decides when a slice stops. ``ytq``, ``dlq`` and ``dlq`` have their own
+(137, 23 and 231); ``dlq``'s cover the path anchoring and the two screens,
 since everything else it does is talk to the platform scheduler.
 
 ``expire_dl.py --self-test`` (20 checks) drives the downloader itself against a
@@ -121,7 +121,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 # quota_widget lives in the zwana-quota checkout: $ZWANA_HOME, a clone beside
 # this one, or ~/zwana-quota. expire_sched._zwana_root predicts this same
-# resolution so `dlqd status` can say which checkout is missing instead of
+# resolution so `dlq status` can say which checkout is missing instead of
 # letting this import traceback.
 _zwana = os.environ.get("ZWANA_HOME")
 _beside = HERE.parent / "zwana-quota"
@@ -594,7 +594,7 @@ def blind_budget(items: list[dict], state: dict) -> int:
     figure. What is left is the only other number in the room: what each item
     declared it needs, less what it has already taken. That is a *cap enforced
     against the items* exactly as it is on a nightly run, never a promise
-    believed, and it is deliberately the same figure ``dlqd run-now --blind``
+    believed, and it is deliberately the same figure ``dlq run-now --blind``
     says out loud before asking — the front end must not compute its own, or
     the number the user agreed to and the number spent would drift apart.
     """
@@ -780,7 +780,7 @@ def spawn_plan(stop_by: float) -> tuple[list[str], str, str]:
 
     ``0`` is the contract's own spelling of "no deadline" and not a special
     case invented here: an item reads it as ``+inf`` (``expire_dl.deadline``),
-    and it is what ``dlqd now`` has always passed.
+    and it is what ``dlq now`` has always passed.
     """
     if stop_by == NO_DEADLINE:
         # No `timeout` at all. Wrapping it in a made-up large number instead
@@ -807,7 +807,7 @@ def run_item(
 
     On a blind run there is no deadline to enforce, so there is no ``timeout``
     around it and the item is told ``EXPIRE_STOP_EPOCH=0`` — the contract's own
-    spelling of "no deadline", and the one ``dlqd now`` has always used. The
+    spelling of "no deadline", and the one ``dlq now`` has always used. The
     item then runs until it is done. Everything that is not the clock is
     unchanged: the session, the byte cap, and the interruption path below.
     """
@@ -931,7 +931,7 @@ def watch(
     go dark. Note which guards do *not* depend on it and so still hold — the
     deadline, the interface byte cap, and the ``timeout`` wrapper around the
     child. What the missing half costs is stated where it is agreed to, in
-    :func:`blind_budget` and in the question ``dlqd`` asks before starting.
+    :func:`blind_budget` and in the question ``dlq`` asks before starting.
     """
     start_iface = iface_bytes()
     last_portal = now()
@@ -1020,7 +1020,7 @@ def hand_over(item: dict, state: dict) -> list[Path]:
       unmounted, no space. Failing here leaves the file sitting in ``out/``,
       already paid for and still there, instead of half-written into Downloads.
 
-    Returns where the files ended up, which is what ``dlqd path`` reports.
+    Returns where the files ended up, which is what ``dlq path`` reports.
     """
     where = dest_of(item)
     source = OUT / item["name"]
@@ -1195,7 +1195,7 @@ def snapshot(force: bool = False, blind: bool = False) -> dict:
 
     Facts only: what the gate decided, the figures it decided on, and the items
     as declared. How any of it is drawn is :func:`expire_sched.compose_status`,
-    which lays out the same terminal ``dlqd list`` does.
+    which lays out the same terminal ``dlq list`` does.
     """
     state = load_state()
     items, rejected = queued_items()
@@ -1503,7 +1503,7 @@ def report(force: bool = False, blind: bool = False) -> int:
 
     Drawn by ``expire_sched`` rather than here, because it is one screen and it
     lays out one terminal — the phone's, in portrait, at about 40 columns. The
-    queue rows in particular have to agree with ``dlqd list`` down to the
+    queue rows in particular have to agree with ``dlq list`` down to the
     figures, and the way to be sure of that is for the same code to draw both.
     This end owns the facts (:func:`snapshot`); that end owns the layout.
     """

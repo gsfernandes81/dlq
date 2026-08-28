@@ -6,8 +6,8 @@ downloads queued here — always leaving a floor for the morning and never
 touching the paid reserve. `docs/download-queue.md` is the user guide;
 `queue/README.md` is the item contract.
 
-One command: **`dlqd`**. Bare on a terminal it opens the queue's screen; off
-one it prints status. `dlqd dlq <url>` queues a plain file URL (until
+One command: **`dlq`**. Bare on a terminal it opens the queue's screen; off
+one it prints status. `dlq <url>` queues a plain file URL (until
 2026-08-28 that was a command of its own). Videos are queued by
 [`ytq`](../ytq), which lives in its own repo and writes into this queue.
 
@@ -16,7 +16,7 @@ one it prints status. `dlqd dlq <url>` queues a plain file URL (until
 This repo split out of a monorepo on 2026-08-28, alongside two siblings:
 
 - **`~/dlq`** — this repo: the queue, its runner (`expire_runner.py`), the
-  shared downloader (`expire_dl.py`), and `dlqd` (`expire_sched.py`,
+  shared downloader (`expire_dl.py`), and `dlq` (`expire_sched.py`,
   `expire_ui.py`, `dlq.py`).
 - **`~/ytq`** — the YouTube front end, plus `ytdl_item.py`, which the items it
   writes download through.
@@ -51,10 +51,10 @@ mv ~/or3/.env ~/zwana-quota/.env                      # portal credentials
 uv tool uninstall or3-expire-queue
 uv tool install --editable ~/dlq
 uv tool install --editable ~/ytq
-ln -sf ~/dlq/completions/dlqd.fish ~/.config/fish/completions/
-rm -f ~/.config/fish/completions/dlq.fish             # dlq is a dlqd verb now
-dlqd arm                                              # re-register the nightly job
-dlqd status                                           # says what it found
+ln -sf ~/dlq/completions/dlq.fish ~/.config/fish/completions/
+rm -f ~/.config/fish/completions/dlq.fish            # the command is dlq now
+dlq arm                                               # re-register the nightly job
+dlq status                                            # says what it found
 ```
 
 The `sed` matters: items written before the split carry an absolute
@@ -64,7 +64,7 @@ downloader fails every night without spending a byte.
 ## Scheduling on Android — findings the nightly job stands on
 
 Measured on this phone in 2026-08, for the retired installer-download job,
-and still what `dlqd arm` relies on:
+and still what `dlq arm` relies on:
 
 - **JobScheduler, not runit/cron/nohup.** A userspace poll loop lives only
   while Termux does; JobScheduler is the system's own scheduler — it survives
