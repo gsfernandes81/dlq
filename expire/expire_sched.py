@@ -1400,17 +1400,17 @@ def show_names() -> int:
 # --------------------------------------------------------------------------- #
 
 #: Which command fills each destination, for the line that explains it.
-FILLED_BY = {"video": "ytq", "file": "dlq"}
+FILLED_BY = {"video": "ytq", "audio": "ytq, audio only", "file": "dlq"}
 
 
 def show_dest(argv: list[str]) -> int:
     """Show or set where finished downloads are put.
 
-    Two of them, because a film and an installer do not belong in the same
-    folder on a phone. Resolved when the file is delivered rather than when it
-    was queued, so changing one of these moves the things already waiting in
-    the queue as well — otherwise it would not be a default, it would be a
-    decision taken once and quietly kept.
+    Three of them, because a film, a song and an installer do not belong in
+    the same folder on a phone. Resolved when the file is delivered rather
+    than when it was queued, so changing one of these moves the things already
+    waiting in the queue as well — otherwise it would not be a default, it
+    would be a decision taken once and quietly kept.
     """
     runner = _runner()
     paint = _paint()
@@ -1450,12 +1450,20 @@ def show_dest(argv: list[str]) -> int:
         # The command once, then the two forms under it: at 40 columns the
         # command name alone is a third of the line, and repeating it pushes
         # what each form does onto a wrap.
+        #
+        # `KIND` rather than the kinds spelled into both forms, which is what
+        # this did while there were two of them: three made the longer form
+        # exactly 40 columns, filling a phone's line edge to edge with no
+        # margin, and a fourth would have wrapped it. The names go underneath
+        # once, where adding one costs nothing.
         print(f"{_me()} dest")
-        kinds = "|".join(runner.DEST_KINDS)
-        forms = [(f"{kinds} PATH", "change one"), (f"{kinds} default", "put it back")]
+        forms = [("KIND PATH", "change one"), ("KIND default", "put it back")]
         form_w = max(len(form) for form, _ in forms)
         for form, does in forms:
             print(f"  {form.ljust(form_w)}   {paint(does, '90')}")
+        named = ", ".join(runner.DEST_KINDS[:-1]) + f" or {runner.DEST_KINDS[-1]}"
+        for line in _wrap(f"KIND is {named}", width - 2):
+            print(f"  {paint(line, '90')}")
         spelled = ", ".join(_short(p) for p in dict.fromkeys(defaults.values()))
         for line in _wrap(f"defaults: {spelled}", width - 2):
             print(f"  {paint(line, '90')}")
@@ -2770,6 +2778,37 @@ def _self_test() -> int:
                         "--blind" in argv,
                         blind,
                     )
+
+                # Every destination the runner knows has to have a command
+                # named against it, or `dlqd dest` and the screen both raise a
+                # KeyError the moment somebody adds a kind — which is exactly
+                # what adding `audio` on 2026-08-28 would have done.
+                check(
+                    "every destination says which command fills it",
+                    sorted(FILLED_BY),
+                    sorted(runner.DEST_KINDS),
+                )
+                # Audio is its own destination and not an alias for video: a
+                # song delivered among the films is one the music player will
+                # not offer. Its default is the same folder as the rest, which
+                # on the phone is Android's Downloads.
+                check("audio is a destination", "audio" in runner.DEST_KINDS, True)
+                check(
+                    "and defaults where the others do",
+                    runner.default_dests()["audio"],
+                    runner.default_dests()["video"],
+                )
+                # Set separately, or it is not a setting at all.
+                sound = root / "songs"
+                worked, _ = set_dest("audio", str(sound))
+                check("audio is set on its own", worked, True)
+                check("and moves only itself", runner.dests()["audio"], sound)
+                check(
+                    "leaving video where it was",
+                    runner.dests()["video"],
+                    runner.default_dests()["video"],
+                )
+                set_dest("audio", "default")
 
                 # Setting a destination, through the one function both the
                 # command and the screen call. A directory one level down is

@@ -1555,6 +1555,34 @@ def write_item(number: int, slug: str, source: str, again: bool = False) -> Path
     return final
 
 
+#: The two destinations ytq queues into, and the one it uses when nothing is
+#: said. ``dlq`` fills the third (``file``); the runner owns the full list.
+VIDEO_DEST = "video"
+AUDIO_DEST = "audio"
+
+
+def dest_for(choice: Choice, asked: str = VIDEO_DEST) -> str:
+    """Which destination an item declares: a kind, or the path asked for.
+
+    An audio-only pick is not a video and does not belong in the folder videos
+    go to — the same argument ``DEST_KINDS`` already makes about a film and an
+    installer, one step further in. A phone makes it sharper than a desktop
+    would: the music player and the video player look in different places, and
+    a song delivered among the films is one nothing will offer to play.
+
+    Decided from :attr:`Choice.kind`, which is the row that was actually
+    chosen, and deliberately not from the file extension — at queue time there
+    is no file yet to have one, and the runner resolves this at delivery
+    precisely so that changing the setting moves what is already queued.
+
+    ``--dest`` names a directory and wins over both, which is the runner's own
+    rule about an absolute path in the header, kept rather than re-decided.
+    """
+    if asked != VIDEO_DEST:
+        return asked
+    return AUDIO_DEST if choice.kind == "audio" else VIDEO_DEST
+
+
 def landing(dest: str) -> str:
     """Where a ``DEST`` value will actually put the file, for a message.
 
@@ -3044,7 +3072,12 @@ def app(
                     break
                 choice, run_now = chosen
                 start = options.index(choice)
-                decided = confirm(win, target, info, choice, run_now, paint, dest)
+                # The resolved destination and not the one asked for: this
+                # screen prints the folder the file lands in, and a line that
+                # disagrees with where it turns up is worse than no line.
+                decided = confirm(
+                    win, target, info, choice, run_now, paint, dest_for(choice, dest)
+                )
             if decided is None:
                 typed, screen = "", came_from
                 continue
@@ -3056,7 +3089,7 @@ def app(
                 choice,
                 info.get("title") or slug,
                 time.strftime("%Y-%m-%d", time.gmtime()),
-                dest,
+                dest_for(choice, dest),
                 source_key(info),
             )
             try:
@@ -3439,6 +3472,54 @@ def _self_test() -> int:
             "q " in tight or "esc " in tight,
             True,
         )
+
+    # -- an audio-only pick is not a video ---------------------------------- #
+
+    sound = {
+        "title": "X", "extractor_key": "Youtube", "duration": 60,
+        "formats": [
+            {"format_id": "137", "ext": "mp4", "vcodec": "avc1", "acodec": "none",
+             "height": 1080, "filesize": 300_000_000},
+            {"format_id": "18", "ext": "mp4", "vcodec": "avc1", "acodec": "mp4a",
+             "height": 360, "filesize": 40_000_000},
+            {"format_id": "140", "ext": "m4a", "vcodec": "none", "acodec": "mp4a",
+             "abr": 129, "filesize": 10_000_000},
+        ],
+    }
+    picks = {option.kind: option for option in choices(sound)[0]}
+    check("every kind of pick is offered", set(picks), {"merge", "single", "audio"})
+    # The music player and the video player look in different folders on a
+    # phone, so a song delivered among the films is one nothing offers to play.
+    check("an audio-only pick goes to audio", dest_for(picks["audio"]), AUDIO_DEST)
+    for kind in ("merge", "single"):
+        check(f"a {kind} pick still goes to video", dest_for(picks[kind]), VIDEO_DEST)
+    # `--dest` names a directory and wins over both, which is the runner's own
+    # rule about an absolute path in the header rather than a second one.
+    for kind in ("merge", "single", "audio"):
+        check(
+            f"and --dest overrides it for a {kind} pick",
+            dest_for(picks[kind], "/music"),
+            "/music",
+        )
+    # Every kind ytq can emit has to be one the runner will resolve, or the
+    # item is delivered nowhere and stays in out/ with nothing raising.
+    try:
+        sys.path.insert(0, str(HERE))
+        import expire_runner as _runner
+
+        for kind in (VIDEO_DEST, AUDIO_DEST):
+            check(
+                f"the runner knows the {kind} destination",
+                kind in _runner.DEST_KINDS,
+                True,
+            )
+            check(
+                f"and resolves {kind} to a real path",
+                isinstance(_runner.dest_of({"dest": kind}), Path),
+                True,
+            )
+    except ImportError:  # pragma: no cover - the sibling is always there
+        print("SKIP the runner is not importable, so its kinds were not checked")
 
     # -- a withheld extraction is not a 360p video --------------------------- #
 
@@ -4384,8 +4465,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--dest",
         metavar="DIR",
-        help="put this one somewhere other than the configured video directory "
-        "(dlqd dest sets that)",
+        help="put this one somewhere other than the configured video or audio "
+        "directory (dlqd dest sets those)",
     )
     parser.add_argument(
         "--from-json",

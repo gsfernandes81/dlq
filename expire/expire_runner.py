@@ -220,10 +220,19 @@ CONFIG_FILE = ROOT / "config.json"
 #: reports rather than discovering at the moment of delivery.
 ANDROID_DOWNLOADS = Path("/storage/emulated/0/Download")
 
-#: The two destinations, and which command fills each. Separate because a video
-#: and an installer do not belong in the same place on a phone, and one of them
-#: is usually wanted in Movies.
-DEST_KINDS = ("video", "file")
+#: The three destinations, and which command fills each. Separate because a
+#: video, a song and an installer do not belong in the same place on a phone,
+#: and one of them is usually wanted in Movies.
+#:
+#: ``audio`` was split out of ``video`` on 2026-08-28: an audio-only pick from
+#: the format list is not a video and a music player is not looking where a
+#: video player is. It is a *kind* rather than a rule about file extensions,
+#: because what decides it is which row was chosen — and at queue time there
+#: is no file yet to have an extension.
+#:
+#: Order is the order both front ends list them in, so the screen and the
+#: command agree without either spelling it.
+DEST_KINDS = ("video", "audio", "file")
 
 
 def on_termux() -> bool:

@@ -96,7 +96,7 @@ HINTS = {
     # The queue's own screen: the status scrolls, the keys under it act.
     "queue": "↑↓ scroll   press a key   q back",
     "queue-live": "x stop   ↑↓ scroll   a key   q back",
-    "dest": "v video   f files   q back",
+    "dest": "v video  a audio  f files  q back",
     "confirm": "y do it   any other key: no",
     # With a second answer offered, the hint has to admit it exists: "any other
     # key: no" over a screen showing a b is a screen contradicting itself.
@@ -111,7 +111,7 @@ TIGHT_HINTS = {
     "item-live": "x stop  a key  q back",
     "queue": "↑↓  a key  q back",
     "queue-live": "x stop  a key  q back",
-    "dest": "v video  f files  q back",
+    "dest": "v vid  a aud  f file  q back",
     "confirm": "y do it  else no",
     "confirm-two": "a key above  else no",
     "log": "↑↓ scroll  q back",
@@ -1874,8 +1874,15 @@ QACTS = {
 }
 
 
+#: One key per destination, in :data:`expire_runner.DEST_KINDS` order. Spelled
+#: here rather than inside the screen so the check that every kind is reachable
+#: reads the same tuple the screen does — a short zip does not raise, it just
+#: leaves the last kind with no key, which is the failure worth catching.
+DEST_KEYS = (ord("v"), ord("a"), ord("f"))
+
+
 def dest_screen(win, paint: dict) -> tuple[str, bool]:
-    """Where finished downloads go — both destinations, and either one changed.
+    """Where finished downloads go — every destination, and any one changed.
 
     The only setting the queue has, and the last thing that could be changed
     from the command line alone. It matters more than it sounds on a phone:
@@ -1920,10 +1927,11 @@ def dest_screen(win, paint: dict) -> tuple[str, bool]:
         key = win.getch()
         if key in (ord("q"), 27, curses.KEY_LEFT):
             return flash, False
-        # Zipped rather than indexed: a third destination would make this key
-        # map short, not raise, and the screen would still work for the two it
-        # knows. The hint names the same two.
-        picked = dict(zip((ord("v"), ord("f")), kinds, strict=False)).get(key)
+        # Zipped rather than indexed, which is what let `audio` be added on
+        # 2026-08-28 by extending one tuple: a destination past the end of the
+        # key map makes it short rather than raising, and the screen goes on
+        # working for the ones it knows. The hint names the same keys.
+        picked = dict(zip(DEST_KEYS, kinds, strict=False)).get(key)
         if picked is None:
             flash = "that key does nothing here" if 32 <= key < 127 else ""
             continue
@@ -2389,6 +2397,27 @@ def _self_test() -> int:
                 set(acts) <= set(QACTS),
                 True,
             )
+            # The same rule one screen further in. `dest_screen` zips its keys
+            # against the runner's kinds, which is what let `audio` be added by
+            # extending a tuple — and is also what would leave a kind with no
+            # key at all, silently, since a short zip does not raise. So the
+            # key map has to be at least as long as the list of kinds, and the
+            # hint has to name every key at both widths.
+            kinds = sched._runner().DEST_KINDS
+            check(
+                "every destination has a key to reach it",
+                len(DEST_KEYS) >= len(kinds),
+                True,
+            )
+            # 80 and 32: the two the hint sets are keyed on just above, so a
+            # key present in one set and missing from the other is caught.
+            for letter, kind in zip(DEST_KEYS, kinds, strict=False):
+                for span in (80, 32):
+                    check(
+                        f"and the {kind} key is on the hints at {span}",
+                        f"{chr(letter)} " in hint("dest", span),
+                        True,
+                    )
             check(
                 f"and every act is offered on {verdict}",
                 set(QACTS) - set(acts),
