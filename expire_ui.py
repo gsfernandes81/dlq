@@ -1063,6 +1063,8 @@ def list_screen(
                 pos -= 1
             elif key in (curses.KEY_DOWN, ord("j")):
                 pos += 1
+            elif key == curses.KEY_MOUSE:
+                pos += ytq.read_wheel()
             elif key == curses.KEY_HOME:
                 pos = 0
             elif key == curses.KEY_END:
@@ -1117,6 +1119,8 @@ def list_screen(
             cursor -= 1
         elif key in (curses.KEY_DOWN, ord("j")):
             cursor += 1
+        elif key == curses.KEY_MOUSE:
+            cursor += ytq.read_wheel()
         elif key == curses.KEY_NPAGE:
             cursor += 5
         elif key == curses.KEY_PPAGE:
@@ -2183,6 +2187,9 @@ def app(win) -> list[str]:
     """
     curses.curs_set(0)
     win.keypad(True)
+    # Touch scrolling, ytq's own switch: wheels only, so a tap can never
+    # press a key — this screen has keys that fire downloads.
+    ytq.enable_touch_scroll()
     paint = ink(win)
     queue = Queue()
     cursor = 0

@@ -150,6 +150,20 @@ unregisters it. Both are also `a` and `c` on [the queue
 screen](#the-queue-itself), under the line that says which it currently is. `arm` registers the runner **in the checkout** whether or not
 `dlq` itself is installed, so re-arm after moving `~/dlq`.
 
+## When something fails
+
+`dlq dump` prints one paste of everything a bug report needs: the
+environment, how each sibling checkout resolved, what the gate thinks, the
+state rows, the head of each failing item (its `sys.path` lines are usually
+the evidence) and the tails of the newest logs. `dlq dump NAME` narrows it
+to one download. Every section is guarded, so it finishes on broken trees —
+which is when it is needed.
+
+Items queued **before the split** import `ytdl_item` off the queue root;
+the module moved to the ytq checkout, and a shim at the queue root answers
+that import with the real module, so pre-split items keep downloading
+without being edited.
+
 ## Checking on it
 
 ```

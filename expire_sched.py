@@ -2094,6 +2094,48 @@ def _self_test() -> int:
     check("the runner is there", RUNNER.is_file(), True)
     check("the root passes its own check", root_problem(), None)
 
+    # -- the dump, and the shim ------------------------------------------- #
+    # dump exists to be run against broken trees, so what is pinned is that
+    # it FINISHES whatever the tree holds, and that its evidence sections
+    # come out. Run against the real root, whose contents this must not
+    # depend on — the section headers and the root's own path are the
+    # contract, not any particular item.
+    with _quiet() as (out, _):
+        code = dump()
+    said = out.getvalue()
+    check("dump finishes", code, 0)
+    for want in ("== environment", "== roots", "== state.json", "== items", "== logs"):
+        check(f"dump carries {want}", want in said, True)
+    check("dump names the queue root", str(ROOT) in said, True)
+    check("dump reports the gate in words", "gate" in said, True)
+
+    # The compatibility shim: a pre-split item inserts only the queue root
+    # and imports ytdl_item — the shim there must answer with the REAL module
+    # from the ytq checkout, by replacing itself in sys.modules. Driven in a
+    # subprocess because that is exactly how an item does it.
+    repo = Path(__file__).resolve().parent
+    check("the shim file exists at the queue root", (repo / "ytdl_item.py").is_file(), True)
+    if (repo / "ytdl_item.py").is_file():
+        probe = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.path.insert(0, sys.argv[1]); "
+                "import ytdl_item; print(ytdl_item.__file__)",
+                str(repo),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        check("a pre-split item's import survives the shim", probe.returncode, 0)
+        landed = probe.stdout.strip()
+        check(
+            "and lands on the ytq checkout's module",
+            landed.endswith("ytdl_item.py") and str(repo) not in landed,
+            True,
+        )
+
     saved_root = globals()["ROOT"]
     try:
         globals()["ROOT"] = ROOT / "queue"  # a real dir, but not a queue root
@@ -2904,6 +2946,7 @@ HELP = (
     ("dest", "show or set where finished downloads are put"),
     ("queue", "just the queued item files"),
     ("logs", "last 40 lines of the runner log"),
+    ("dump", "everything a bug report needs, in one paste"),
     ("run-now", "run the whole queue now; --blind if the portal is unreachable"),
     ("arm", "register the nightly job"),
     ("cancel", "unregister it"),
@@ -2949,6 +2992,128 @@ def _me() -> str:
     if name and name in (Path(__file__).name, "dlq"):
         return name
     return "dlq" if shutil.which("dlq") else Path(__file__).name
+
+
+def dump(target: str | None = None) -> int:
+    """One paste of everything a bug report needs. Plain lines, no fitting.
+
+    Built for the moment a download fails on the phone and the fix is being
+    worked out somewhere else entirely: the environment, how each sibling
+    checkout resolved, what the gate thinks, the state rows, the head of
+    each interesting item (its sys.path lines are usually the evidence), and
+    the tails of the newest logs. Every section is guarded — this runs
+    AGAINST broken trees, so a section that cannot be read says so and the
+    rest still comes out.
+    """
+
+    def section(title: str) -> None:
+        print(f"\n== {title}")
+
+    def guarded(title: str, body) -> None:
+        section(title)
+        try:
+            body()
+        except Exception as exc:  # noqa: BLE001 - the dump must finish
+            print(f"  (unreadable: {exc})")
+
+    print(f"dlq dump  {stamp()}")
+
+    def _environment() -> None:
+        print(f"  python     : {sys.version.split()[0]}  {sys.executable}")
+        for name in ("EXPIRE_HOME", "YTQ_HOME", "ZWANA_HOME"):
+            value = os.environ.get(name)
+            if value:
+                print(f"  {name} = {value}")
+        tool = shutil.which("yt-dlp") or "(not on PATH)"
+        print(f"  yt-dlp     : {tool}")
+        if tool != "(not on PATH)":
+            try:
+                said = subprocess.run(
+                    [tool, "--version"], capture_output=True, text=True, timeout=15
+                )
+                print(f"  version    : {said.stdout.strip() or said.stderr.strip()}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"  version    : (did not answer: {exc})")
+
+    def _roots() -> None:
+        print(f"  queue root : {ROOT}")
+        print(f"    queue/README.md      : {(ROOT / 'queue' / 'README.md').is_file()}")
+        print(f"    expire_runner.py     : {(ROOT / 'expire_runner.py').is_file()}")
+        print(f"    ytdl_item.py shim    : {(ROOT / 'ytdl_item.py').is_file()}")
+        ytq_dir = Path(ytq.__file__).resolve().parent
+        print(f"  ytq        : {ytq_dir}")
+        print(f"    ytdl_item.py         : {(ytq_dir / 'ytdl_item.py').is_file()}")
+        zwana = _zwana_root()
+        print(f"  zwana      : {zwana}")
+        print(f"    quota_widget.py      : {(zwana / 'quota_widget.py').is_file()}")
+        print(f"  gate       : {root_problem() or 'ok'}")
+        print(f"  shebang    : {shebang_problem() or 'ok'}")
+
+    def _state() -> None:
+        raw = (ROOT / "state.json")
+        if not raw.is_file():
+            print("  (no state.json)")
+            return
+        state = json.loads(raw.read_text())
+        for name, record in sorted(state.items()):
+            if isinstance(record, dict):
+                brief = {
+                    key: record[key]
+                    for key in ("strikes", "last_error", "error", "done", "delivered")
+                    if key in record
+                }
+                print(f"  {name}: {brief if brief else record}")
+            else:
+                print(f"  {name}: {record}")
+
+    def _items() -> None:
+        rows = items()
+        wanted = [
+            row
+            for row in rows
+            if (target and target in row["name"])
+            or (not target and (row["where"] == "failed" or row["error"]))
+        ]
+        if not wanted and not target:
+            # Nothing failed: the queue's heads still say how items import.
+            wanted = [row for row in rows if row["where"] == "queued"][:2]
+        if not wanted:
+            print("  (no matching item)")
+        for row in wanted:
+            print(f"  -- {row['name']}  where={row['where']}  error={row['error']}")
+            try:
+                head = row["path"].read_text(encoding="utf-8").splitlines()[:14]
+                for line in head:
+                    print(f"     {line}")
+            except OSError as exc:
+                print(f"     (unreadable: {exc})")
+
+    def _logs() -> None:
+        if not LOGS.is_dir():
+            print("  (no logs directory)")
+            return
+        logs = sorted(LOGS.glob("*.log"), key=lambda p: p.stat().st_mtime)
+        picked = [
+            path
+            for path in logs
+            if target is None or target in path.name or path.name == "runner.log"
+        ][-3:]
+        if not picked:
+            print("  (no logs)")
+        for path in picked:
+            print(f"  -- {path.name} (last 40 lines)")
+            try:
+                for line in path.read_text(errors="replace").splitlines()[-40:]:
+                    print(f"     {line}")
+            except OSError as exc:
+                print(f"     (unreadable: {exc})")
+
+    guarded("environment", _environment)
+    guarded("roots", _roots)
+    guarded("state.json", _state)
+    guarded("items", _items)
+    guarded("logs", _logs)
+    return 0
 
 
 def default_action(interactive: bool | None = None) -> str:
@@ -3073,6 +3238,8 @@ def main(argv: list[str] | None = None) -> int:
         cancel()
     elif action == "logs":
         tail(LOGS / "runner.log", 40)
+    elif action == "dump":
+        return dump(rest[0] if rest else None)
     elif action == "queue":
         # Same filter the runner applies: .staging and __pycache__ are not
         # items, and listing them here reads as a queue with junk in it.

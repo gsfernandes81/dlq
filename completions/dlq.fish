@@ -31,6 +31,8 @@ complete -c dlq -n __dlq_bare -a path    -d "where a finished download landed"
 complete -c dlq -n __dlq_bare -a dest    -d "show or set where finished downloads are put"
 complete -c dlq -n __dlq_bare -a queue   -d "just the queued item files"
 complete -c dlq -n __dlq_bare -a logs    -d "last 40 lines of the runner log"
+complete -c dlq -n __dlq_bare -a dump    -d "everything a bug report needs, in one paste"
+complete -c dlq -n "__dlq_after dump" -a "(dlq names 2>/dev/null)"
 complete -c dlq -n __dlq_bare -a run-now -d "fire the whole queue once, without waiting"
 complete -c dlq -n "__dlq_after run-now" -l blind \
     -d "no portal reachable: spend mobile data (asks first)"

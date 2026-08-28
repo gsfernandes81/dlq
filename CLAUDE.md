@@ -76,6 +76,20 @@ Decisions that travel with this code — each was arrived at the hard way:
   job firing faithfully onto an empty queue, saying nothing. The Installing
   section of `docs/download-queue.md` explains it.
 
+- **A flick scrolls; only a keypress spends** (2026-08-28). The queue screen
+  takes wheel events — which is what Termux turns a touch drag into — through
+  `ytq.enable_touch_scroll`/`ytq.read_wheel` (one copy, in ytq): the cursor
+  in the list, the held item's position while moving. Wheels only, on
+  purpose: a tap must never press a key on a screen whose keys fire
+  downloads.
+- **`dlq dump [NAME]` is the bug report** (2026-08-28): environment, sibling
+  resolution, gate verdicts, state rows, failing items' heads and the newest
+  logs, every section guarded so it finishes on the broken trees it exists
+  for. And **the queue root carries a `ytdl_item.py` shim**: pre-split items
+  import ytdl_item off the queue root, the real module moved to the ytq
+  checkout, and the shim replaces itself in `sys.modules` with the real one —
+  it can go when the last pre-split item is gone.
+
 ## Checks
 
 `make test` (pytest) = `make check` (`.githooks/checks.sh`, the one copy; the
