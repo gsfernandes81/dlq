@@ -780,8 +780,58 @@ def actions_for(row: dict) -> list[tuple[str, str]]:
     return offered
 
 
+def progress_bar(have: int, total: int, width: int) -> str:
+    """``[====····] 44%`` — the queue's one visual for how far in a download is.
+
+    Spelled the way ``quota_widget`` spells its own bar, ``=`` against ``·``,
+    rather than block characters: this is drawn on a phone, and the block
+    glyphs are East-Asian *ambiguous* width, so a terminal that renders them
+    double leaves the bar a column wider than it was measured at. The same
+    argument that keeps ``⚠`` off ytq's notices.
+
+    With no total there is no fraction to draw and the caller gets ``""`` —
+    a full-looking bar over an unknown size is the one reading worse than
+    none.
+    """
+    if total <= 0 or width < 12:
+        return ""
+    fraction = min(1.0, max(0.0, have / total))
+    pct = f"{min(99, int(fraction * 100))}%" if fraction < 1 else "100%"
+    track = max(4, width - len(pct) - 4)
+    filled = int(round(fraction * track))
+    return f"[{'=' * filled}{'·' * (track - filled)}] {pct}"
+
+
+def _with_live(row: dict, reading: tuple[int, int] | None) -> dict:
+    """*row* with its byte figures replaced by the download's own report.
+
+    The row's ``have`` is counted off the disk when the listing is read; the
+    report is written by the download itself and is newer. Both were on the
+    item screen at once — the head from one, the foot from the other — and a
+    second apart they disagreed, which is how the screen came to show two
+    different sizes for one file and no way to tell which was stale. One
+    reading feeds the word, the figures and the bar now, so they cannot.
+    """
+    if reading is None:
+        return row
+    have, total = reading
+    fresh = dict(row)
+    fresh["have"] = have
+    if total:
+        # Only once the server has stated a size: `_of` prints `≤` against the
+        # declared cap until then, and inventing a total here would turn that
+        # honest bound into a figure nobody measured.
+        fresh["stated"] = total
+        fresh["total"] = total
+    return fresh
+
+
 def item_lines(
-    row: dict, width: int, place: tuple[int, int] | None = None
+    row: dict,
+    width: int,
+    place: tuple[int, int] | None = None,
+    downloading: bool = False,
+    reading: tuple[int, int] | None = None,
 ) -> list[str]:
     """The facts about one item, laid out for the screen it is going on.
 
@@ -796,8 +846,14 @@ def item_lines(
     compact = width < WIDE
     room = max(12, width - 4)
     lines: list[str] = []
-    head = f"{row['where']} · {_state_of(row, compact)}".rstrip(" ·")
-    figures = _progress_of(row, compact)
+    shown = _with_live(row, reading)
+    # `where` is the DIRECTORY the item file sits in, and an item being
+    # downloaded is still in queue/ — it only moves when it finishes. So the
+    # screen said "queued" over a download in flight. The word says what is
+    # happening; the directory is still what decides everything below.
+    head_word = "downloading" if downloading else row["where"]
+    head = f"{head_word} · {_state_of(shown, compact)}".rstrip(" ·")
+    figures = _progress_of(shown, compact)
     if figures and len(head) + 2 + len(figures) <= room:
         lines.append(f"{head}  {figures}")
     else:
@@ -1160,8 +1216,14 @@ def item_screen(win, paint: dict, queue, row: dict, flash: str) -> str:
         win.erase()
         height, width = win.getmaxyx()
         _bar(win, paint, f" {_slug_of(row['name'])} ")
+        # Asked once per draw and handed to both the head and the foot, so the
+        # two can never be a second apart from each other.
+        downloading = queue.downloading(row["name"])
+        reading = ytq.now_progress(row["name"]) if downloading else None
         line = 2
-        for text in item_lines(row, width, queue.place(row["name"])):
+        for text in item_lines(
+            row, width, queue.place(row["name"]), downloading, reading
+        ):
             if line >= height - 4:
                 break
             _addstr(win, line, 2, text)
@@ -1173,7 +1235,15 @@ def item_screen(win, paint: dict, queue, row: dict, flash: str) -> str:
             _addstr(win, line, 2, key, curses.A_BOLD | paint.get("head", 0))
             _addstr(win, line, 5, _fit(label, width - 7))
             line += 1
-        live = queue.live_line(width)
+        # When the download on screen is THIS item, the foot is a bar rather
+        # than a second copy of the figures already in the head. When it is
+        # some other item, the live line still names it — that is not
+        # duplication, it is the only place that says so.
+        if downloading:
+            shown = _with_live(row, reading)
+            live = progress_bar(shown["have"], shown["total"], width - 2)
+        else:
+            live = queue.live_line(width)
         _foot(
             win,
             paint,
@@ -2159,6 +2229,15 @@ class Queue:
             return "stopping the run; what is downloaded is kept"
         return ""
 
+    def downloading(self, name: str) -> bool:
+        """Whether *name* is the download in flight, ours or the runner's.
+
+        Both halves matter: ``running`` is the one this session started with
+        ``n``, ``live`` is what :func:`sched._running_now` sees writing its
+        status file — a nightly firing, or a ``dlq now`` in another terminal.
+        """
+        return self.live == name or (self.running.alive and self.running.name == name)
+
     def live_line(self, width: int) -> str:
         """The one line that says something is downloading, or nothing.
 
@@ -2931,6 +3010,56 @@ def _self_test() -> int:
             "clearing nothing says so",
             do_clear_tries(by_name(sched.items())["40-alpha.py"]),
             "it has no failed tries",
+        )
+
+    # ------------------------------------------------- one reading, one truth
+    # Both of these were on screen at once and disagreed: the head said
+    # "queued · 44%  20 MiB/44 MiB" over a download in flight while the foot
+    # said "↓ 20 MiB / 44 MiB" from a fresher read of the same file.
+    base = {
+        "name": "40-clip.py", "where": "queued", "cap": 50_000_000,
+        "stated": 44_000_000, "total": 44_000_000, "have": 20_000_000,
+        "files": [], "error": None, "attempts": 0, "last": "", "desc": "",
+        "dest": "video", "lost": "", "recorded": [],
+    }
+    # The word: an item being downloaded is still IN queue/, and the screen
+    # used to say so. `where` still decides everything else.
+    plain = item_lines(base, 40)
+    check("a still item says where it is", plain[0].startswith("queued"), True)
+    live = item_lines(base, 40, downloading=True, reading=(20_000_000, 44_000_000))
+    check("one in flight says what it is doing", live[0].startswith("downloading"), True)
+    check("and the queue position survives the word",
+          any("in the queue" in row for row in
+              item_lines(base, 40, (1, 7), True, (20_000_000, 44_000_000))), True)
+
+    # The figures: the head takes the download's own report, so the number
+    # beside the word is the number the bar is drawn from.
+    moved = item_lines(base, 40, downloading=True, reading=(33_000_000, 44_000_000))
+    check("the head takes the fresher reading", "31 MiB" in moved[0], True)
+    check("and the stale one is gone", "19 MiB" in moved[0], False)
+    fresh = _with_live(base, (33_000_000, 44_000_000))
+    check("the bar is drawn from that same reading",
+          progress_bar(fresh["have"], fresh["total"], 30).endswith("] 75%"), True)
+    check("no reading leaves the row alone", _with_live(base, None), base)
+    # A total the server has not stated must not be invented: `_of` prints the
+    # declared cap with a `≤` until then, and a made-up total loses that.
+    unstated = dict(base, stated=0, total=50_000_000)
+    check("an unstated size stays unstated",
+          _with_live(unstated, (20_000_000, 0))["stated"], 0)
+
+    # The bar itself: it refuses rather than lying, and carries no glyph whose
+    # width a phone might double (the rule that keeps ⚠ off ytq's notices).
+    check("a bar with no total is no bar", progress_bar(20, 0, 30), "")
+    check("nor is one with no room", progress_bar(20, 40, 8), "")
+    check("a full bar says 100%", progress_bar(44, 44, 30).endswith("] 100%"), True)
+    check("an empty one is all track", "=" in progress_bar(0, 44, 30), False)
+    for span in (14, 24, 40, 80):
+        drawn = progress_bar(21, 44, span)
+        at_most(f"the bar fits {span}", len(drawn), span)
+        check(
+            f"and carries no wide glyph at {span}",
+            set(drawn) <= set("[]=· 0123456789%"),
+            True,
         )
 
     # ------------------------------------------------- moving one about

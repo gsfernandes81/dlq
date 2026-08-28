@@ -82,6 +82,22 @@ Decisions that travel with this code — each was arrived at the hard way:
   in the list, the held item's position while moving. Wheels only, on
   purpose: a tap must never press a key on a screen whose keys fire
   downloads.
+- **One reading feeds the word, the figures and the bar** (2026-08-28). The
+  item screen showed a download's size twice — the head from `row["have"]`,
+  counted off the disk when the listing was read, and the foot from the
+  download's own `.status.json`, read fresh at draw time — so a second apart
+  they disagreed and nothing said which was stale. `item_screen` now asks
+  once per draw and hands the same reading to `_with_live` (head) and
+  `progress_bar` (foot), and the foot is a bar rather than a second copy of
+  the numbers. A live line naming a *different* item stays: that is the only
+  place that says so. Two rules travel with it: **`where` is the directory,
+  not the activity** — an item being downloaded is still in `queue/`, which
+  is why the head said "queued" over a download in flight, so the word is
+  now chosen by `Queue.downloading` while `where` goes on deciding
+  everything else; and **an unstated total is never invented**, because
+  `_of` prints the declared cap with a `≤` until a server states a size.
+  The bar is `=` against `·` like `quota_widget`'s, never block glyphs —
+  they are East-Asian ambiguous width and a phone may draw them double.
 - **`dlq dump [NAME]` is the bug report** (2026-08-28): environment, sibling
   resolution, gate verdicts, state rows, failing items' heads and the newest
   logs, every section guarded so it finishes on the broken trees it exists

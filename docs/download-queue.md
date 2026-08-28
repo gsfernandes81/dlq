@@ -150,6 +150,14 @@ unregisters it. Both are also `a` and `c` on [the queue
 screen](#the-queue-itself), under the line that says which it currently is. `arm` registers the runner **in the checkout** whether or not
 `dlq` itself is installed, so re-arm after moving `~/dlq`.
 
+## Watching one download
+
+Opening an item that is downloading says `downloading · 45%  20 MiB/44 MiB`
+at the top and draws a bar at the bottom. The two are one reading — the
+download's own progress file, asked once per redraw — so they cannot
+disagree. An item that is merely queued says `queued` and draws no bar; if
+some *other* item is downloading, the foot names that one instead.
+
 ## When something fails
 
 `dlq dump` prints one paste of everything a bug report needs: the
