@@ -68,8 +68,8 @@ fetched.
 are, so edits take effect immediately and pulling a repo needs no reinstall:
 
 ```
-uv tool install --offline --editable ~/dlq
-uv tool install --offline --editable ~/ytq
+uv tool install --editable ~/dlq
+uv tool install --editable ~/ytq
 ```
 
 **Non-editable** — copies the modules into the tool's own environment, so the
@@ -77,8 +77,8 @@ commands are unaffected by edits to the checkouts, at the cost of needing
 `--force` to pick any change up:
 
 ```
-uv tool install --offline ~/dlq
-uv tool install --offline --force ~/dlq   # after editing
+uv tool install ~/dlq
+uv tool install --force ~/dlq   # after editing
 ```
 
 An installed copy still works out of `~/dlq/`, not next to itself
@@ -102,11 +102,9 @@ and links the commands into `~/.local/bin` — nothing is written inside the
 checkouts and no other project's environment is touched. If they are not found
 afterwards, `~/.local/bin` is not on PATH; `uv tool update-shell` fixes that.
 
-`--offline` is there because this is a metered connection: it forbids any
-download, so the install either completes from `uv`'s cache or fails without
-spending data. If it fails saying `hatchling` is unavailable, drop the flag —
-that is a **≈1 MB** fetch of the build backend from PyPI, once, and it is then
-cached for future installs.
+The install fetches at most the **≈1 MB** hatchling build backend from PyPI,
+once — after that it is served from `uv`'s cache. (Add `--offline` if you want
+the install to refuse rather than fetch on a metered connection.)
 
 Both packages need hatchling rather than `uv_build` (which is compiled into
 the uv binary and fetches nothing): `uv_build` resolves one module name to one

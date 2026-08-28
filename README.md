@@ -30,7 +30,7 @@ beside its own repo, then under `~`. The phone keeps all three under `~`.
 ## Checks
 
 `make dev` (`uv sync`, once, networked) puts the locked pytest into `.venv`;
-then `make test` (`uv run --offline pytest`) or `make check` — the same
+then `make test` (`uv run pytest`) or `make check` — the same
 module self-tests either way;
 `.githooks/checks.sh` is the one copy of what runs, and the pre-push hook
 (`git config core.hooksPath .githooks`, once per clone) refuses a push that
@@ -49,8 +49,8 @@ mv ~/or3/termux/expire/{state.json,config.json} ~/dlq/     # 2>/dev/null ok
 sed -i 's|/home/or3/termux/expire|/home/dlq|' ~/dlq/queue/*.py  # old item paths
 mv ~/or3/.env ~/zwana-quota/.env                      # portal credentials
 uv tool uninstall or3-expire-queue
-uv tool install --offline --editable ~/dlq
-uv tool install --offline --editable ~/ytq
+uv tool install --editable ~/dlq
+uv tool install --editable ~/ytq
 ln -sf ~/dlq/completions/dlqd.fish ~/.config/fish/completions/
 rm -f ~/.config/fish/completions/dlq.fish             # dlq is a dlqd verb now
 dlqd arm                                              # re-register the nightly job

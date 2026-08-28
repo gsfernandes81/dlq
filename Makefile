@@ -1,7 +1,6 @@
-# make dev      uv sync — the one networked step, run once: pytest into .venv
-#               (and hatchling once, where the repo builds). After it,
-#               everything below works offline.
-# make test     the self-tests through pytest, offline by construction
+# make dev      uv sync: the locked pytest into .venv (and hatchling once,
+#               where the repo builds) — a few hundred KB, then cached
+# make test     the self-tests through pytest
 # make check    the same self-tests through the push gate's own runner —
 #               what .githooks/pre-push runs, needing only bash + python3;
 #               it knows nothing about uv on purpose, because it runs
@@ -14,13 +13,13 @@ dev:
 	uv sync
 
 test:
-	uv run --offline pytest -q
+	uv run pytest -q
 
 check:
 	bash .githooks/checks.sh
 
 lint:
 	@if command -v ruff >/dev/null 2>&1; then ruff check .; \
-	else uv run --offline --group lint ruff check .; fi
+	else uv run --group lint ruff check .; fi
 
 .PHONY: dev test check lint
