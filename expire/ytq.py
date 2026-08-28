@@ -907,6 +907,158 @@ def withheld(info: dict) -> bool:
     return playable > 0 and adaptive == 0
 
 
+#: A ``uv tool`` venv carries this at its root; an ordinary venv does not.
+#: Chosen over a path substring because it is uv's own bookkeeping rather than
+#: a guess about where uv keeps things — ``UV_TOOL_DIR`` moves that — and
+#: because it *lists the requirements*, so the ``--with`` packages a reinstall
+#: has to re-assert are read off the machine instead of being remembered by
+#: whoever last wrote the upgrade line.
+#:
+#: Deliberately not ``yt-dlp --version``, whose banner says ``(pip)`` under a
+#: uv tool as well (measured 2026-08-28): the one thing in that output that
+#: looks like an answer to this question and is not.
+UV_RECEIPT = "uv-receipt.toml"
+
+
+def uv_receipt(python: str) -> Path | None:
+    """The receipt of the uv tool venv *python* belongs to, if it is one."""
+    if not python:
+        return None
+    receipt = Path(python).parent.parent / UV_RECEIPT
+    return receipt if receipt.is_file() else None
+
+
+def uv_requirements(receipt: Path) -> list[str]:
+    """The packages a uv tool was installed with, in uv's own order.
+
+    Read rather than remembered, because the failure this exists to prevent is
+    a reinstall that silently drops a ``--with`` package — and a hard-coded
+    list is that same failure with extra steps. Scoped to the ``requirements``
+    block: ``entrypoints`` below it carries the tool's own name again.
+    """
+    try:
+        text = receipt.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    start = text.find("requirements")
+    opened = text.find("[", start) if start >= 0 else -1
+    closed = text.find("]", opened) if opened >= 0 else -1
+    if closed < 0:
+        return []
+    return re.findall(r'name\s*=\s*"([^"]+)"', text[opened:closed])
+
+
+def shebang_of(binary: str) -> str:
+    """The interpreter a console script names, or ``""`` if it names none."""
+    try:
+        with open(binary, "rb") as handle:
+            first = handle.readline(4096).decode("utf-8", "replace")
+    except OSError:
+        return ""
+    return first[2:].strip().split()[0] if first.startswith("#!") else ""
+
+
+def install_of(command: str) -> tuple[str, str]:
+    """``(how it was installed, the interpreter behind it)``.
+
+    ``uv-tool``, ``pip`` or ``absent``. The question matters because the two
+    have different upgrade commands and neither works on the other, and the
+    obvious place to look — the tool's own version banner — cannot answer it.
+    """
+    binary = shutil.which(command)
+    if not binary:
+        return "absent", ""
+    python = shebang_of(binary)
+    return ("uv-tool" if uv_receipt(python) else "pip"), python
+
+
+def short_python(python: str) -> str:
+    """The interpreter as somebody would type it, if that means the same file.
+
+    A Termux shebang is 45 characters — longer than this screen's whole fold —
+    and a path broken mid-word is a path retyped wrong. The basename is what
+    fits and what a person types, so it is used *only* when ``which`` resolves
+    it back to the same file, and the full path stands when it does not.
+    """
+    if not python:
+        return "python3"
+    name = Path(python).name
+    # Compared as written and never resolved: a venv's `python3` is a symlink
+    # to the base interpreter, so `resolve()` makes every venv look like the
+    # system python — and `python3 -m pip` under the system python installs
+    # into a different place entirely, which is the whole failure this line
+    # is meant to avoid.
+    return name if shutil.which(name) == python else python
+
+
+def upgrade_command(command: str) -> str:
+    """The line that actually upgrades *command* on this machine.
+
+    ``uv tool upgrade`` is deliberately not what this emits: a tool installed
+    with any version constraint answers "Nothing to upgrade" and does nothing
+    at all, silently (measured 2026-08-28). ``install --force`` moves it
+    whatever the original requirement said — and re-asserts the ``--with``
+    packages, which a plain reinstall drops, trading one silent failure for
+    the other one.
+    """
+    kind, python = install_of(command)
+    if kind == "absent":
+        return f"{command} is not on PATH"
+    receipt = uv_receipt(python)
+    if receipt is not None:
+        withs = "".join(
+            f" --with {name}" for name in uv_requirements(receipt) if name != command
+        )
+        return f"uv tool install {command}{withs} --force"
+    return f"{short_python(python)} -m pip install -U {command}"
+
+
+def checkout_root() -> Path | None:
+    """The repository this is running out of, found by its own ``.git``.
+
+    Walked rather than counted from the queue root's depth. Two directories up
+    is right on the phone and is ``/`` the moment anything else is true — and
+    ``git -C / pull`` in a fix somebody is about to type is worse than
+    offering no path at all. ``.exists`` rather than ``.is_dir`` because a
+    worktree's ``.git`` is a file.
+    """
+    for folder in (HERE, *HERE.parents):
+        if (folder / ".git").exists():
+            return folder
+    return None
+
+
+def own_upgrade() -> str:
+    """How to update *this* tool, which is a different question again.
+
+    An editable install runs out of the checkout, so what updates it is a pull
+    and not a reinstall. Told apart by where this file actually is: under the
+    uv tools directory is a copy that has to be reinstalled, anywhere else is
+    the checkout it was installed from.
+    """
+    venv = Path(sys.executable).parent.parent
+    here = Path(__file__).resolve().parent
+    copied = (venv / UV_RECEIPT).is_file() and str(here).startswith(str(venv.resolve()))
+    if copied:
+        return "uv tool install or3-expire-queue --force"
+    root = checkout_root()
+    return f"git -C {tilde(root)} pull" if root else "reinstall ytq from the checkout"
+
+
+def tool_version(command: str, timeout: int = 20) -> str:
+    """What ``<command> --version`` says. Free: no network, no URL."""
+    binary = shutil.which(command)
+    if not binary:
+        return ""
+    try:
+        done = subprocess.run(
+            [binary, "--version"], capture_output=True, text=True, timeout=timeout
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return (done.stdout or "").strip().splitlines()[0].strip() if done.stdout else ""
+
+
 def withheld_note(width: int) -> str:
     """The one line the format list carries while the answer is a refusal.
 
@@ -915,52 +1067,60 @@ def withheld_note(width: int) -> str:
     withheld the res" — a warning clipped mid-word, on a screen whose whole
     job at that moment is to be believed.
 
+    Short on purpose. The notice has already said the whole of it once this
+    session; what this has left to do is stop somebody queueing 360p while
+    believing it is the best on offer, and "bot check" does that in two words.
+    At the floor it is those two words and nothing else.
+
     No symbol in front of it. ``⚠`` is ambiguous-width and routinely rendered
     as a double-width emoji, which would put the clip back; and this repo's
-    own rule is that the status is the word, never the decoration. Bold and
-    cost-red where there is colour, and the words "bot check" where there is
-    not.
+    own rule is that the status is the word, never the decoration.
     """
     if width >= WIDE:
-        return (
-            "the bot check withheld the other formats — "
-            "this is not all this video has"
-        )
-    return "bot check — not all the formats" if width >= TIGHT else (
-        "bot check: formats withheld"
-    )
+        return "bot check — youtube sent one format, not all of them"
+    return "bot check — one format only" if width >= TIGHT else "bot check"
 
 
-def withheld_advice(detail: str) -> list[str]:
-    """What a thin answer means, and the two things that fix it.
+def withheld_advice(
+    detail: str,
+    version: str | None = None,
+    upgrade: str | None = None,
+    mine: str | None = None,
+) -> list[str]:
+    """What a thin answer means, and what to do — in order of likelihood.
 
-    Both halves every time, because they fail identically and having one
-    without the other looks exactly like having neither: no runtime and the
-    js challenge goes unsolved, no cookies and the watch page is rate-limited
-    into answering without visitor data. Either way the formats are withheld
-    and nothing raises.
+    **The version goes first, and that is a correction.** This notice used to
+    lead with the cookies and the JS runtime, and on 2026-08-28 it sent
+    somebody down both of those with a correct config and a six-week-old
+    yt-dlp. YouTube breaks yt-dlp faster than anything else this repo depends
+    on, so "how old is it" is at once the likeliest answer and the cheapest to
+    ask — ``--version`` needs no URL and no network.
 
-    The check is ``yt-dlp -v`` rather than a description of where things
-    ought to be installed, because it answers both halves itself in two of its
-    own lines, with no URL and no network — and it answers for *whichever*
-    yt-dlp actually runs. That is the question somebody with a tool venv, a
-    pkg install and a pip install on one phone cannot otherwise settle, and it
-    is exactly where the solver ends up installed into the wrong python.
+    The upgrade line is composed from how the thing is *actually* installed
+    (:func:`upgrade_command`) rather than guessed, because a uv tool and a pip
+    install take different commands and neither works on the other. Same again
+    for ``ytq`` (:func:`own_upgrade`), where an editable install is updated by
+    a pull and not by a reinstall at all.
 
-    Bare rather than piped through ``grep``: the pipeline that greps for both
-    lines is 48 characters and this screen wraps at 36, and a command broken
-    across two lines is a command retyped wrong. The two line names are given
-    instead, which is the same information and survives the fold.
+    Everything is injectable so the wording can be measured on a machine with
+    no yt-dlp on it.
     """
+    if version is None:
+        version = tool_version("yt-dlp") or "unknown"
+    if upgrade is None:
+        upgrade = upgrade_command("yt-dlp")
+    if mine is None:
+        mine = own_upgrade()
     return [
         "youtube sent one format, not all of them",
-        "no PO token, so only the legacy 360p stream came back — not a video "
-        "that only exists in 360p.",
-        detail,
-        "run yt-dlp -v — no url, no data — and read two of its lines:",
-        "JS runtimes: must name one, not none. Optional libraries: must list "
-        "yt_dlp_ejs.",
-        "both, or it stays refused. docs: ~/or3/docs/ytq.md",
+        f"yt-dlp {version} — usually just stale. upgrade:",
+        upgrade,
+        f"then the cookies: {detail}",
+        "and yt-dlp -v must show a JS runtime and yt_dlp_ejs.",
+        # One entry, because the worst case — both of these being uv
+        # commands — is a row over the phone's budget with two. The em-dash
+        # is spaced so the path cannot read as part of the command.
+        f"ytq itself: {mine} — docs: ~/or3/docs/ytq.md",
     ]
 
 
@@ -3354,7 +3514,43 @@ def _self_test() -> int:
 
     # The notice has to fit the phone whole, like every other one here: it is
     # the only place the fix is written down at the moment it is needed.
-    advice = withheld_advice(f"{COOKIE_SUGGESTION}, written 23 days ago")
+    # Injected rather than read off this machine: the wording is measured on
+    # a phone, and the gate that measures it runs where there may be no yt-dlp
+    # at all. The real values come from the machine at the point of use.
+    advice = withheld_advice(
+        f"{COOKIE_SUGGESTION}, written 23 days ago",
+        version="2026.7.4",
+        upgrade="python3.14 -m pip install -U yt-dlp",
+        mine="git -C ~/or3 pull",
+    )
+    # And the same notice at its LONGEST, which is the measurement that
+    # matters: every string on it is composed from the machine, so the pretty
+    # case fitting says nothing about the phone in front of somebody. Both
+    # tools installed as uv tools with a jar that is missing is the widest
+    # this can get, and it was a row over budget when only the tidy case was
+    # being measured.
+    for worst_upgrade in (
+        "uv tool install yt-dlp --with yt-dlp-ejs --force",
+        "/data/data/com.termux/files/usr/bin/python3.14 -m pip install -U yt-dlp",
+    ):
+        # Both strings `own_upgrade` can actually return when it is not a
+        # `git -C` line — driven from the code rather than invented, or this
+        # measures a notice the tool never shows.
+        for worst_mine in (
+            "uv tool install or3-expire-queue --force",
+            "reinstall ytq from the checkout",
+        ):
+            longest = withheld_advice(
+                f"{COOKIE_SUGGESTION} is named by {CONFIG_SUGGESTION} but is not there",
+                version="2026.08.19",
+                upgrade=worst_upgrade,
+                mine=worst_mine,
+            )
+            at_most(
+                "the notice fits a phone at its longest",
+                len(message_body(longest, 40 - 4, 999)),
+                24 - 4,
+            )
     body = message_body(advice, 40 - 4, 24 - 4)
     check("the bot-check notice fits a phone whole", len(body),
           len(message_body(advice, 40 - 4, 999)))
@@ -3366,8 +3562,106 @@ def _self_test() -> int:
     # why this one is bare rather than piped through grep.
     check("the check command survives whole",
           any("yt-dlp -v" in row for row in body), True)
-    check("it says both halves are needed",
-          any("both" in row for row in body), True)
+    # The version leads, and that is the correction this notice exists in:
+    # it used to lead with the cookies and the runtime, and sent somebody down
+    # both with a correct config and a six-week-old yt-dlp.
+    check("the notice leads with what happened", "youtube sent one" in body[0], True)
+    check("and the version is the first fix offered",
+          any("2026.7.4" in row for row in body[:6]), True)
+    check("the cookies come after it",
+          body.index(next(r for r in body if "cookies" in r))
+          > body.index(next(r for r in body if "2026.7.4" in r)), True)
+    check("and ytq's own upgrade is on it",
+          any("git -C ~/or3 pull" in row for row in body), True)
+    # A command is only useful if it survives the fold intact.
+    check("the upgrade command is one unbroken row",
+          "python3.14 -m pip install -U yt-dlp" in body, True)
+
+    # -- how a thing was installed decides how it is upgraded ---------------- #
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        # A uv tool venv and an ordinary one differ by uv's own receipt, which
+        # is what this reads — a path substring would be wrong the moment
+        # UV_TOOL_DIR moves it, and yt-dlp's own banner says "(pip)" for both.
+        for name in ("uvtool", "plain"):
+            (root / name / "bin").mkdir(parents=True)
+            (root / name / "bin" / "python3").write_text("#!/bin/sh\n")
+        (root / "uvtool" / UV_RECEIPT).write_text(
+            '[tool]\nrequirements = [\n'
+            '    { name = "yt-dlp" },\n    { name = "yt-dlp-ejs" },\n]\n'
+            'entrypoints = [\n    { name = "yt-dlp", from = "yt-dlp" },\n]\n',
+            encoding="utf-8",
+        )
+        check("a uv tool venv is recognised by its receipt",
+              uv_receipt(str(root / "uvtool" / "bin" / "python3")) is not None, True)
+        check("and an ordinary venv is not",
+              uv_receipt(str(root / "plain" / "bin" / "python3")), None)
+        # Read from the requirements block and not the entrypoints below it,
+        # which names the tool a second time.
+        got = uv_requirements(root / "uvtool" / UV_RECEIPT)
+        check("the --with packages are read off the machine", got, ["yt-dlp", "yt-dlp-ejs"])
+
+        script = root / "yt-dlp"
+        script.write_text(f"#!{root / 'uvtool' / 'bin' / 'python3'}\n")
+        script.chmod(0o755)
+        keep = os.environ.get("PATH", "")
+        try:
+            os.environ["PATH"] = str(root)
+            kind, python = install_of("yt-dlp")
+            check("a uv tool install is told apart", kind, "uv-tool")
+            line = upgrade_command("yt-dlp")
+            # `uv tool upgrade` respects the original requirement and answers
+            # "Nothing to upgrade" on a pinned tool, silently doing nothing.
+            check("and is upgraded by a forced install", "--force" in line, True)
+            check("never by uv tool upgrade", "tool upgrade" in line, False)
+            # A reinstall that drops --with trades this bug for the other one.
+            check("re-asserting the with packages", "--with yt-dlp-ejs" in line, True)
+            check("and not naming the tool as its own extra",
+                  "--with yt-dlp " in line, False)
+
+            script.write_text(f"#!{root / 'plain' / 'bin' / 'python3'}\n")
+            script.chmod(0o755)
+            check("a plain install is told apart", install_of("yt-dlp")[0], "pip")
+            check("and is upgraded with pip",
+                  upgrade_command("yt-dlp"),
+                  f"{root / 'plain' / 'bin' / 'python3'} -m pip install -U yt-dlp")
+            os.environ["PATH"] = str(root / "nothing")
+            check("and one that is not there says so",
+                  "not on PATH" in upgrade_command("yt-dlp"), True)
+        finally:
+            os.environ["PATH"] = keep
+
+    # `resolve()` would say a venv's python3 IS the system python3, because it
+    # is a symlink to it — and `python3 -m pip` under the system python
+    # installs somewhere else entirely.
+    check("a venv interpreter is never shortened to the system one",
+          short_python("/somewhere/venv/bin/python3"), "/somewhere/venv/bin/python3")
+    check("and no interpreter at all still gives something runnable",
+          short_python(""), "python3")
+
+    # `git -C / pull` is what counting directories produces off the phone, and
+    # a wrong path in a command somebody is about to type is worse than none.
+    root = checkout_root()
+    check("the checkout is found by its .git", root is not None, True)
+    if root is not None:
+        check("and is a real repository", (root / ".git").exists(), True)
+    check("what updates this tool is never the filesystem root",
+          own_upgrade().strip().endswith((" / pull", "-C / pull")), False)
+
+    # The notice is measured whole at 40x24, and below that it truncates — so
+    # what has to survive the cut is the fix most likely to be the answer.
+    # That is the whole reason the version leads.
+    squeezed = message_body(advice, 28, 16)
+    check("a narrow screen still gets the verdict", "youtube sent one" in squeezed[0], True)
+    check("and still gets the version", any("2026.7.4" in r for r in squeezed), True)
+    # Wrapped at a space is fine and unavoidable at 28 columns; what must
+    # never happen is a token split down the middle, which is a command
+    # retyped wrong. Checked on the tokens rather than the string.
+    command = ["python3.14", "-m", "pip", "install", "-U", "yt-dlp"]
+    check("and the upgrade command with it, unbroken",
+          all(word in " ".join(squeezed).split() for word in command), True)
+    check("and is told what it dropped", "more" in squeezed[-1], True)
 
     # -- searching ---------------------------------------------------------- #
 
