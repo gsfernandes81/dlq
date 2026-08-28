@@ -1,0 +1,39 @@
+[project]
+name = "dlq"
+version = "0.2.0"
+description = "The pre-midnight expiring-quota download queue and its nightly runner"
+requires-python = ">=3.11"
+# Deliberately empty. Everything here is stdlib; ytq and quota_widget are
+# reached as sibling CHECKOUTS (~/ytq, ~/zwana-quota, or $YTQ_HOME /
+# $ZWANA_HOME), never as installed packages, so installing this pulls nothing
+# from the internet.
+dependencies = []
+
+[project.scripts]
+# The queue's one command: the screen when called bare on a terminal, status
+# off one, and every verb — including `dlqd dlq`, the plain-URL queuer that
+# used to be a command of its own. It resolves the queue root through
+# ytq._root rather than trusting __file__, so an installed copy still manages
+# the real queue.
+dlqd = "expire_sched:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# Flat sibling modules, not a package: they import each other by bare name and
+# the queue items written into queue/ do the same, so the whole directory has
+# to land on sys.path as one unit.
+only-include = [
+    "dlq.py",
+    "expire_dl.py",
+    "expire_runner.py",
+    "expire_sched.py",
+    "expire_ui.py",
+]
+sources = ["."]
+# Editable installs get a .pth for this directory instead of per-module
+# shims, which keeps `import expire_dl` working the same way the runtime
+# sys.path.insert calls already assume.
+dev-mode-dirs = ["."]

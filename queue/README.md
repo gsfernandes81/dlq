@@ -103,7 +103,7 @@ the queue forever.
 ## Use the shared downloader
 
 `expire_dl` handles slicing, resume, validators and reporting. For a direct
-file URL, `python3 ../dlq.py <url>` writes this whole item for you, sized from
+file URL, `python3 ../expire_sched.py dlq <url>` writes this whole item for you, sized from
 the server's own headers. By hand, a complete item:
 
 ```python
@@ -113,7 +113,7 @@ the server's own headers. By hand, a complete item:
 # PARTIAL: yes
 # DESC: Ubuntu 24.04 desktop ISO
 import sys
-sys.path.insert(0, "/data/data/com.termux/files/home/or3/termux/expire")
+sys.path.insert(0, "/data/data/com.termux/files/home/dlq")
 import expire_dl
 
 sys.exit(expire_dl.run(

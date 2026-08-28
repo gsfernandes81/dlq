@@ -39,7 +39,7 @@ Typical item::
     # EXPIRE: v1
     # EXPECT_BYTES: 4200000000
     # PARTIAL: yes
-    import sys; sys.path.insert(0, "/data/data/com.termux/files/home/or3/termux/expire")
+    import sys; sys.path.insert(0, "/data/data/com.termux/files/home/dlq")
     import expire_dl
     sys.exit(expire_dl.run("https://example/big.iso", "big.iso"))
 
@@ -323,7 +323,7 @@ def fetch(
         # Ranges and byte counting are both meaningless if the server gzips.
         "Accept-Encoding": "identity",
         "Range": f"bytes={offset}-{want_end}",
-        "User-Agent": "or3-expire-dl/1",
+        "User-Agent": "expire-dl/1",
     }
     # Let the protocol do the same-file check: a compliant server answers 206
     # if unchanged and 200 with the whole body if not. A weak ETag is not

@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+
+# Runtime state of the runner. The queue is tracked (the jobs are source);
+# everything the runner writes about them is not.
+done/
+failed/
+heartbeat
+logs/
+out/
+work/
+runner.lock
+state.json
+# Where this device puts finished downloads. Per-device by definition.
+config.json

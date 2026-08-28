@@ -3,7 +3,7 @@
 
 The free grant of ~763 MiB lands at 00:00 UTC and whatever is left of it is
 wiped at the next 00:00 UTC. This runner works through scripts dropped in
-``~/or3/termux/expire/queue`` in the hour before that deadline, so allowance that
+``~/dlq/queue`` in the hour before that deadline, so allowance that
 would evaporate gets spent on something asked for instead.
 
 Guarantees, in the order they matter
@@ -119,9 +119,18 @@ import datetime as dt
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent))  # quota_widget lives one level up, in termux/
+# quota_widget lives in the zwana-quota checkout: $ZWANA_HOME, a clone beside
+# this one, or ~/zwana-quota. expire_sched._zwana_root predicts this same
+# resolution so `dlqd status` can say which checkout is missing instead of
+# letting this import traceback.
+_zwana = os.environ.get("ZWANA_HOME")
+_beside = HERE.parent / "zwana-quota"
+sys.path.insert(1, str(
+    Path(_zwana).expanduser().resolve() if _zwana
+    else (_beside.resolve() if _beside.is_dir() else Path.home() / "zwana-quota")
+))
 
-import quota_widget as qw  # noqa: E402
+import quota_widget as qw  # noqa: E402  (from the zwana-quota checkout)
 import contextlib
 
 ROOT = HERE

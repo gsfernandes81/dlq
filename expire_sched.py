@@ -84,7 +84,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import ytq  # noqa: E402  (sibling module, path fixed up above)
+# ytq lives in its own checkout now: $YTQ_HOME, a clone beside this one, or
+# ~/ytq — the same three answers, in the same order, that ytq._sibling gives
+# for finding this repo. One resolution here covers every module in this
+# checkout that imports this one first (expire_ui deliberately does).
+_ytq = os.environ.get("YTQ_HOME")
+_beside = Path(__file__).resolve().parent.parent / "ytq"
+sys.path.insert(1, str(
+    Path(_ytq).expanduser().resolve() if _ytq
+    else (_beside.resolve() if _beside.is_dir() else Path.home() / "ytq")
+))
+
+import ytq  # noqa: E402  (from the ytq checkout, path fixed up above)
 
 #: The checkout, never this file's directory. Installed non-editable, this
 #: module is a copy in site-packages, and every path below has to keep pointing
@@ -190,19 +201,40 @@ def root_problem() -> str | None:
 
     Only reachable via ``EXPIRE_HOME``, which is honoured blindly on purpose so
     a checkout can live anywhere. Pointed at the wrong directory it otherwise
-    surfaces as an import traceback from the runner — ``quota_widget`` lives one
-    level up from it — which says nothing about the actual mistake.
+    surfaces as an import traceback from the runner — which imports
+    ``quota_widget`` from the zwana-quota checkout — and a traceback says
+    nothing about the actual mistake.
     """
     if not (ROOT / "queue" / "README.md").is_file():
         return (
             f"{ROOT} is not a queue root: no queue/README.md in it. Check EXPIRE_HOME."
         )
-    if not (ROOT.parent / "quota_widget.py").is_file():
+    if not (_zwana_root() / "quota_widget.py").is_file():
         return (
-            f"{ROOT} has no termux/quota_widget.py beside it, which the "
-            f"runner imports; this is not a full checkout"
+            f"no quota_widget.py in {_zwana_root()}, which the runner "
+            f"imports; clone zwana-quota beside the queue checkout or set "
+            f"ZWANA_HOME"
         )
     return None
+
+
+def _zwana_root() -> Path:
+    """Where the runner will look for ``quota_widget``.
+
+    Spelled from :data:`ROOT` rather than this file, because what imports it
+    is ``ROOT/expire_runner.py`` — under ``EXPIRE_HOME`` that may not be this
+    checkout — and the answer has to be the one THAT copy gives: $ZWANA_HOME,
+    a clone beside the queue root, or ~/zwana-quota. expire_runner's own
+    resolution is the original; this predicts it for a message that can name
+    the missing checkout instead of surfacing as an import traceback.
+    """
+    override = os.environ.get("ZWANA_HOME")
+    if override:
+        return Path(override).expanduser().resolve()
+    beside = ROOT.parent / "zwana-quota"
+    if beside.is_dir():
+        return beside.resolve()
+    return Path.home() / "zwana-quota"
 
 
 def do_arm() -> tuple[bool, str]:
@@ -1993,7 +2025,7 @@ def _fake_facts(verdict: str = "early", **changes) -> dict:
             else runner.qw._fake(1_200_000_000)
         ),
         "portal_problem": "no credentials: set zwana_username and "
-        "zwana_password in ~/or3/.env (or export them)",
+        "zwana_password in ~/zwana-quota/.env (or export them)",
         "spendable": 0 if verdict == "spent" else 480 * 1024 * 1024,
         "floor_bytes": runner.FLOOR_BYTES,
         "bps": 800 * 1024,
@@ -2210,11 +2242,12 @@ def _self_test() -> int:
     check("but it is not offered as a command", "now" in ACTIONS, False)
     check("and open is gone; the screen opens files", "open" in ACTIONS, False)
 
-    # quota_widget lives one level up from the runner, so the runner must stay
-    # in the checkout's termux/expire/ for `dlqd status` to import it at all.
+    # The runner imports quota_widget from the zwana-quota checkout, so `dlqd
+    # status` only works where that checkout is reachable — which is exactly
+    # what root_problem() reports when it is not.
     check(
         "quota_widget is reachable from the runner",
-        (ROOT.parent / "quota_widget.py").is_file(),
+        (_zwana_root() / "quota_widget.py").is_file(),
         True,
     )
 
@@ -2639,7 +2672,7 @@ def _self_test() -> int:
             finally:
                 globals()["HEARTBEAT"] = saved_beat
 
-            check("home is written as ~", _short(Path.home() / "or3"), "~/or3")
+            check("home is written as ~", _short(Path.home() / "dlq"), "~/dlq")
             check("a path outside it is left alone", _short(Path("/data/x")), "/data/x")
 
             # Nothing that wraps may invent a break inside a path: these lines
@@ -2869,6 +2902,7 @@ HELP = (
     ("ui", "change it: reorder, rename, remove, retry, download now"),
     ("path NAME", "where a finished download landed"),
     ("dest", "show or set where finished downloads are put"),
+    ("dlq URL", "queue a plain file URL (dlqd dlq --help has the options)"),
     ("queue", "just the queued item files"),
     ("logs", "last 40 lines of the runner log"),
     ("run-now", "run the whole queue now; --blind if the portal is unreachable"),
@@ -2976,7 +3010,7 @@ def usage() -> int:
     print("", file=sys.stderr)
     print("no command: the screen", file=sys.stderr)
     print("NAME: part of a name, or its number", file=sys.stderr)
-    print("docs: ~/or3/docs/download-queue.md", file=sys.stderr)
+    print("docs: ~/dlq/docs/download-queue.md", file=sys.stderr)
     return 2
 
 
@@ -3026,6 +3060,13 @@ def main(argv: list[str] | None = None) -> int:
         return expire_ui.run()
     elif action == "dest":
         return show_dest(rest)
+    elif action == "dlq":
+        # The plain-URL queuer, merged on 2026-08-28: one command owns the
+        # queue. The module keeps its own name and its own self-test; this
+        # is only the door.
+        import dlq
+
+        return dlq.main(rest)
     elif action == "cancel":
         cancel()
     elif action == "logs":

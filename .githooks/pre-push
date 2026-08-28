@@ -1,0 +1,30 @@
+#!/bin/bash
+# Refuse the push if the checks fail. Enable once per clone:
+#
+#     git config core.hooksPath .githooks
+#
+# A push is a deploy here — the phone pulls it and what lands is what runs —
+# so the gate lives on the push. The repo is small enough that every push
+# runs the whole suite; which checks exist is .githooks/checks.sh's business.
+#
+# Escapes, both deliberately loud:
+#
+#     git push --no-verify          skip every hook
+#     SKIP_CHECKS=1 git push        skip this one, and say so
+set -u
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+if [ "${SKIP_CHECKS:-0}" = "1" ]; then
+    echo "pre-push: SKIP_CHECKS=1 -- the checks were NOT run for this push." >&2
+    exit 0
+fi
+command -v python3 >/dev/null || {
+    echo "pre-push: no python3 - every check needs it. Nothing was checked." >&2
+    exit 1
+}
+bash .githooks/checks.sh || {
+    echo "" >&2
+    echo "Nothing was pushed." >&2
+    exit 1
+}
+echo "pre-push: all checks passed."

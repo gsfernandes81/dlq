@@ -13,16 +13,17 @@ cost.
 
 Usage::
 
-    dlq <url>                    # probe the size, queue it
-    dlq <url> --name x.iso       # choose the saved file name
-    dlq <url> --probe            # print size and resume support only
-    dlq <url> --expect-bytes N   # server states no size: set the cap
+    dlqd dlq <url>                    # probe the size, queue it
+    dlqd dlq <url> --name x.iso       # choose the saved file name
+    dlqd dlq <url> --probe            # print size and resume support only
+    dlqd dlq <url> --expect-bytes N   # server states no size: set the cap
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import math
 import re
 import sys
@@ -35,13 +36,23 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import ytq  # noqa: E402  (sibling module: shared queue plumbing)
+# ytq lives in its own checkout: $YTQ_HOME, a clone beside this one, or
+# ~/ytq — the same resolution expire_sched uses, spelled here too because
+# `dlqd dlq` is not the only door (python3 dlq.py runs this file directly).
+_ytq = os.environ.get("YTQ_HOME")
+_beside = Path(__file__).resolve().parent.parent / "ytq"
+sys.path.insert(1, str(
+    Path(_ytq).expanduser().resolve() if _ytq
+    else (_beside.resolve() if _beside.is_dir() else Path.home() / "ytq")
+))
+
+import ytq  # noqa: E402  (from the ytq checkout: shared queue plumbing)
 
 BASE_HEADERS = {
     # Sizes are meaningless if the server gzips, and expire_dl will ask for
     # identity too — probe what will actually be fetched.
     "Accept-Encoding": "identity",
-    "User-Agent": "or3-dlq/1",
+    "User-Agent": "dlq/1",
 }
 
 TIMEOUT = 30
@@ -383,16 +394,17 @@ def _self_test() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
+        prog="dlqd dlq",
         description=__doc__.split("\n")[0],
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=textwrap.dedent("""\
             examples:
-              dlq https://releases.ubuntu.com/24.04/ubuntu-24.04-desktop-amd64.iso
-              dlq https://x.example/build --name build.tar.gz --sha256 <hex>
-              dlq https://x.example/feed --expect-bytes 50000000
+              dlqd dlq https://releases.ubuntu.com/24.04/ubuntu-24.04-desktop-amd64.iso
+              dlqd dlq https://x.example/build --name build.tar.gz --sha256 <hex>
+              dlqd dlq https://x.example/feed --expect-bytes 50000000
 
             for video pages use ytq; the queue itself is dlqd — bare for
-            the screen, or dlqd status. docs: ~/or3/docs/download-queue.md"""),
+            the screen, or dlqd status. docs: ~/dlq/docs/download-queue.md"""),
     )
     parser.add_argument("url", nargs="?", help="the file to download")
     parser.add_argument("--name", help="saved file name (default: from the URL)")

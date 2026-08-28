@@ -2,7 +2,7 @@
 #
 # Install as a symlink, so that pulling the repo updates them:
 #
-#   ln -s ~/or3/termux/expire/completions/dlqd.fish ~/.config/fish/completions/
+#   ln -s ~/dlq/completions/dlqd.fish ~/.config/fish/completions/
 #
 # The symlink points into the checkout rather than copying, for the same reason
 # every path in expire_sched.py does: the checkout is the one queue there is,
@@ -34,6 +34,15 @@ complete -c dlqd -n __dlqd_bare -a logs    -d "last 40 lines of the runner log"
 complete -c dlqd -n __dlqd_bare -a run-now -d "fire the whole queue once, without waiting"
 complete -c dlqd -n "__dlqd_after run-now" -l blind \
     -d "no portal reachable: spend mobile data (asks first)"
+complete -c dlqd -n __dlqd_bare -a dlq     -d "queue a plain file URL"
+complete -c dlqd -n "__dlqd_after dlq" -l name -r -d "saved file name (default: taken from the URL)"
+complete -c dlqd -n "__dlqd_after dlq" -l number -r -d "queue priority prefix (default: after the last)"
+complete -c dlqd -n "__dlqd_after dlq" -l sha256 -r -d "verify the finished file before delivery"
+complete -c dlqd -n "__dlqd_after dlq" -l expect-bytes -r -d "spending cap when the server states no size"
+complete -c dlqd -n "__dlqd_after dlq" -l dest -r -d "put this one somewhere else"
+complete -c dlqd -n "__dlqd_after dlq" -l probe -d "print the size and resume support, write nothing"
+complete -c dlqd -n "__dlqd_after dlq" -l dry-run -d "print the item instead of writing it"
+complete -c dlqd -n "__dlqd_after dlq" -l again -d "queue it even though it is already queued or done"
 complete -c dlqd -n __dlqd_bare -a arm     -d "register the nightly job"
 complete -c dlqd -n __dlqd_bare -a cancel  -d "unregister it"
 

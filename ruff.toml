@@ -1,0 +1,21 @@
+# Same ruleset as the or3 repo this code was split out of on 2026-08-28 —
+# F821 undefined-name is the class of bug that ships a NameError to a job
+# nobody watches fail.
+line-length = 90
+target-version = "py311"          # the phone runs 3.14
+
+[lint]
+select = ["F", "E4", "E7", "E9", "B", "UP", "SIM"]
+ignore = [
+    # `"%d" % x` truncates a float; `f"{x:d}"` raises ValueError on one.
+    # Sites that survive here are the ones where conversion changes behaviour.
+    "UP031",
+    # Environment variables here are lowercase ON PURPOSE (`zwana_username`):
+    # the name is an interface shared with credential files that already
+    # exist on the phone. Capitalising it would silently stop finding them.
+    "SIM112",
+]
+
+[lint.per-file-ignores]
+# Imports that must follow a sys.path insert at module level.
+"expire_runner.py" = ["E402"]
