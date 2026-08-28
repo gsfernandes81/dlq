@@ -37,3 +37,14 @@ sources = ["."]
 # shims, which keeps `import expire_dl` working the same way the runtime
 # sys.path.insert calls already assume.
 dev-mode-dirs = ["."]
+
+# Two groups, not one — the or3 repo's uv plan (docs/uv-dev-env.md there),
+# applied here. `uv sync` installs dev (pytest is pure Python and installs
+# anywhere, the phone included); lint is separate because a plain sync must
+# NOT drag ruff onto a machine that has it natively — Termux ships a native
+# aarch64 ruff, and uv cannot install ruff on Android (neither manylinux nor
+# musllinux). The pin is Termux's own version, so a lint count measured in
+# the container describes what the phone will see.
+[dependency-groups]
+dev = ["pytest>=8"]
+lint = ["ruff==0.16.4"]

@@ -1,16 +1,26 @@
-# make test     the self-tests, through pytest (one item per module)
-# make check    the same self-tests, through the push gate's own runner —
-#               what .githooks/pre-push runs, needing only bash + python3
-# make lint     ruff, where it is installed (not part of the push gate:
-#               the gate runs on the phone, which does not carry ruff)
+# make dev      uv sync — the one networked step, run once: pytest into .venv
+#               (and hatchling once, where the repo builds). After it,
+#               everything below works offline.
+# make test     the self-tests through pytest, offline by construction
+# make check    the same self-tests through the push gate's own runner —
+#               what .githooks/pre-push runs, needing only bash + python3;
+#               it knows nothing about uv on purpose, because it runs
+#               wherever the push happens
+# make lint     ruff — the one already on PATH if there is one (Termux ships
+#               a native build; uv cannot install ruff on Android), else the
+#               locked one from the lint group
+
+dev:
+	uv sync
 
 test:
-	python3 -m pytest -q
+	uv run --offline pytest -q
 
 check:
 	bash .githooks/checks.sh
 
 lint:
-	ruff check .
+	@if command -v ruff >/dev/null 2>&1; then ruff check .; \
+	else uv run --offline --group lint ruff check .; fi
 
-.PHONY: test check lint
+.PHONY: dev test check lint

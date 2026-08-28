@@ -29,7 +29,9 @@ beside its own repo, then under `~`. The phone keeps all three under `~`.
 
 ## Checks
 
-`make test` (pytest) or `make check` — the same module self-tests either way;
+`make dev` (`uv sync`, once, networked) puts the locked pytest into `.venv`;
+then `make test` (`uv run --offline pytest`) or `make check` — the same
+module self-tests either way;
 `.githooks/checks.sh` is the one copy of what runs, and the pre-push hook
 (`git config core.hooksPath .githooks`, once per clone) refuses a push that
 fails them. They need the sibling checkouts present. They are offline: no

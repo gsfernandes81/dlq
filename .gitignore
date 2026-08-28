@@ -13,3 +13,6 @@ runner.lock
 state.json
 # Where this device puts finished downloads. Per-device by definition.
 config.json
+
+# uv-managed dev environment (make dev)
+.venv/
