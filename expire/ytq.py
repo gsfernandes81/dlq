@@ -2259,6 +2259,19 @@ def pick(
             return options[cursor], now_default
 
 
+#: The confirmation's two field labels, drawn at x=2 with their values in a
+#: column to the right of them.
+CONFIRM_LABELS = ("priority", "file name")
+
+#: Where that column starts on a phone. **Derived, not typed**: it was 11,
+#: reasoned as "file name is nine columns", which is true and one short —
+#: nine columns starting at 2 end at 10, so 11 is flush against the label and
+#: the screen rendered `file namecrust-of-rust-subtyping`. Computed from the
+#: labels themselves so that arithmetic cannot be got wrong again, and so that
+#: a third label is a wider gutter rather than another one touching.
+CONFIRM_GUTTER = 2 + max(len(label) for label in CONFIRM_LABELS) + 1
+
+
 def confirm(
     win,
     url: str,
@@ -2286,9 +2299,9 @@ def confirm(
         win.erase()
         height, width = win.getmaxyx()
         narrow = width < WIDE
-        # The field values sit right of their labels, and "file name" is nine
-        # columns, so this is as far left as the column can go.
-        gutter = 11 if narrow else 14
+        # As far left as the column can go on a phone, and roomier where there
+        # is room. Both clear the longest label, which a check pins.
+        gutter = CONFIRM_GUTTER if narrow else 14
         # The header is the screen's identity, and the fact it has to carry is
         # not "now versus later" but "paid versus free". Said in words because
         # a terminal without colours must not be the one that loses it.
@@ -2330,8 +2343,8 @@ def confirm(
             f"holds it to",
             curses.A_BOLD | cost,
         )
-        _addstr(win, 6, 2, "priority", curses.A_DIM)
-        _addstr(win, 7, 2, "file name", curses.A_DIM)
+        _addstr(win, 6, 2, CONFIRM_LABELS[0], curses.A_DIM)
+        _addstr(win, 7, 2, CONFIRM_LABELS[1], curses.A_DIM)
         if narrow:
             # Only the saved file, and only its name: the queue path is the
             # same information twice and the leading directories are the part
@@ -3472,6 +3485,28 @@ def _self_test() -> int:
             "q " in tight or "esc " in tight,
             True,
         )
+
+    # -- the confirmation's two columns never touch -------------------------- #
+
+    # `file name` is nine columns and starts at x=2, so it ends at 10 and a
+    # gutter of 11 drew `file namecrust-of-rust-subtyping` — a label and a
+    # value welded into one word on the screen that decides the file name.
+    for gutter, where in ((CONFIRM_GUTTER, "a phone"), (14, "a wide terminal")):
+        for label in CONFIRM_LABELS:
+            check(
+                f"{label!r} clears its value on {where}",
+                gutter > 2 + len(label),
+                True,
+            )
+    # Derived rather than typed, so a third label widens the column instead of
+    # touching it — which is the only reason the number above can be trusted.
+    check(
+        "the gutter is computed from the labels",
+        CONFIRM_GUTTER,
+        2 + max(len(label) for label in CONFIRM_LABELS) + 1,
+    )
+    # And the value still has somewhere to go at the floor.
+    at_most("the labels leave room for a value at 32", CONFIRM_GUTTER + 8, 32)
 
     # -- an audio-only pick is not a video ---------------------------------- #
 
