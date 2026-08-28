@@ -386,6 +386,21 @@ def _reindex(order: list[str]) -> str | None:
     return None
 
 
+def landed_index(rows: list[dict], pos: int) -> int | None:
+    """Where the cursor lands after a drop: the row at queued position *pos*.
+
+    By position and never by name, because :func:`do_reorder` *renamed* the
+    item — its number is its place — so the name that was picked up finds
+    nothing in the re-read list. The drop's whole meaning is "put it at
+    *pos* among the queued", so the row now at that position is the one that
+    moved, whatever it is called now.
+    """
+    queued = [index for index, row in enumerate(rows) if row["where"] == "queued"]
+    if not queued:
+        return None
+    return queued[max(0, min(pos, len(queued) - 1))]
+
+
 def do_reorder(rows: list[dict], name: str, pos: int) -> tuple[str, bool]:
     """Put the queued item *name* at position *pos*: ``(what to say, moved)``.
 
@@ -1058,7 +1073,14 @@ def list_screen(
                     queue.receipts.append(said)
                 dropped, moving, flash = moving, "", said
                 queue.read()
-                found = queue.index_of(dropped)
+                # A drop that moved something renamed it, so the cursor
+                # follows the POSITION it was dropped at (landed_index); one
+                # that did not still knows the name it kept.
+                found = (
+                    landed_index(queue.rows, pos)
+                    if moved
+                    else queue.index_of(dropped)
+                )
                 cursor = cursor if found is None else found
             elif key in (ord("q"), 27):
                 moving, flash = "", "left where it was"
@@ -2923,6 +2945,12 @@ def _self_test() -> int:
             "three is 1st of 4",
         )
         check("and it is where it was put", queue_names()[0], "05-three.py")
+        landed = landed_index(sched.items(), 0)
+        check(
+            "the cursor's landing row is the moved item under its new name",
+            sched.items()[landed]["name"] if landed is not None else None,
+            "05-three.py",
+        )
         # The whole point of doing this here rather than with mv: a move takes
         # the paid-for bytes with it, every time, because it is the same rename
         # everything else in this file is.
@@ -2956,6 +2984,18 @@ def _self_test() -> int:
             "and the order asked for is the order got",
             [_slug_of(name) for name in queue_names()],
             ["one", "three", "tight", "two", "alpha"],
+        )
+        landed = landed_index(sched.items(), 1)
+        check(
+            "and the landing row survives a full re-deal of the keys",
+            _slug_of(sched.items()[landed]["name"]) if landed is not None else None,
+            "three",
+        )
+        check("an empty queue has nowhere to land", landed_index([], 0), None)
+        check(
+            "a clamped drop lands on the last queued row",
+            landed_index(sched.items(), 99),
+            landed_index(sched.items(), len(queue_names()) - 1),
         )
         check(
             "all of them two digits",
