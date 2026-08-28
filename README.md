@@ -58,3 +58,25 @@ dlqd status                                           # says what it found
 The `sed` matters: items written before the split carry an absolute
 `sys.path.insert` to the old checkout, and an item that cannot import its
 downloader fails every night without spending a byte.
+
+## Scheduling on Android — findings the nightly job stands on
+
+Measured on this phone in 2026-08, for the retired installer-download job,
+and still what `dlqd arm` relies on:
+
+- **JobScheduler, not runit/cron/nohup.** A userspace poll loop lives only
+  while Termux does; JobScheduler is the system's own scheduler — it survives
+  Termux being killed and restores after a reboot. `termux-job-scheduler`
+  needs the Termux:API **app**, not just the CLI package (without the app it
+  hangs).
+- **15 minutes is Android's floor** for a periodic job (clamped since N).
+  The real uncertainty is **Doze**: screen off, unplugged and stationary,
+  firings defer into maintenance windows; charging suppresses Doze entirely.
+  The pre-midnight window is a *bias*, not a guarantee — an accepted trade,
+  since a missed night just means the job tries again the next evening. A
+  night that matters: put the phone on charge over midnight.
+- **A job body must never take Termux's wake lock.** JobScheduler holds one
+  across the job's execution, and Termux's own lock is a single global flag
+  with no reference counting — `termux-wake-unlock` releases it regardless of
+  who acquired it, so a job that unlocked on its way out would silently drop
+  a lock taken for something else.
