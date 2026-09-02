@@ -323,7 +323,8 @@ open a finished one, read its log. There are no commands for those any more —
 each of them is easier to do to a download you are looking at than to a name
 you have to type correctly first. `s` goes one level up, to the queue as a
 whole: the status, the nightly job, the destinations, the settings, and
-running the lot now.
+running the lot now — and the listing says so on a dim line of its own, on the
+screens with no download in flight to report there instead.
 
 The listing picks and the item screen acts. `↑↓` moves, `⏎` opens whatever the
 cursor is on, and every key that changes something is on that second screen,

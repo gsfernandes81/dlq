@@ -134,6 +134,30 @@ def hint(name: str, width: int) -> str:
     return (TIGHT_HINTS if width < ytq.TIGHT else HINTS)[name]
 
 
+#: What ``s`` leads to, spelled out, at the two widths. Its budget is the
+#: hints' own — drawn at x=1 and clipped at ``width - 1`` — because it is
+#: drawn on the line above them and by the same rule.
+LEGEND = "s  queue: tonight, the job, settings"
+TIGHT_LEGEND = "s  queue, job, settings"
+
+
+def list_legend(width: int) -> str:
+    """The listing's one dim line saying where ``s`` goes.
+
+    A bare ``dlq`` opens the listing, and the only word on it for the queue's
+    own screen was the hint's ``s queue``, which does not say that the window,
+    the reserve and the nightly job are all one key further on. Nothing else on
+    the first screen a person sees says the settings exist at all.
+
+    It gets the row the foot keeps for the live line, and gives it up to both
+    of the things that outrank a signpost: **a download in flight takes it**,
+    because what is being spent now is worth more than where a key goes, and
+    **a flash takes it for the moment it is shown**, which is
+    :func:`_foot`'s own rule that what just happened comes first.
+    """
+    return LEGEND if width >= ytq.TIGHT else TIGHT_LEGEND
+
+
 # --------------------------------------------------------------------------- #
 # Names
 # --------------------------------------------------------------------------- #
@@ -1038,7 +1062,13 @@ def draw_list(
     moving: str = "",
     pos: int = 0,
 ) -> int:
-    """Draw the listing and return the line it was scrolled to."""
+    """Draw the listing and return the line it was scrolled to.
+
+    The spare row above the keys carries :func:`list_legend` on the screens
+    that have nothing else to say there — no download in flight, no flash,
+    nothing in the air — because this is the screen a bare ``dlq`` opens and
+    the settings are two keys away from it.
+    """
     win.erase()
     height, width = win.getmaxyx()
     shown = preview(queue.rows, moving, pos) if moving else queue.rows
@@ -1079,6 +1109,9 @@ def draw_list(
         _addstr(
             win, 2 + offset, 0, text.ljust(width - 1) if index == cursor else text, attr
         )
+    live = "" if moving else queue.live_line(width)
+    if not moving and not live and not flash:
+        _addstr(win, height - 3, 1, _fit(list_legend(width), width - 2), curses.A_DIM)
     _foot(
         win,
         paint,
@@ -1087,7 +1120,7 @@ def draw_list(
             "moving" if moving else ("list-live" if queue.mine() else "list"),
             width,
         ),
-        "" if moving else queue.live_line(width),
+        live,
     )
     win.refresh()
     return top
@@ -2669,6 +2702,15 @@ def _self_test() -> int:
     for name in HINTS:
         check(f"{name} picks the tight hints at 32", hint(name, 32), TIGHT_HINTS[name])
         check(f"{name} picks the full hints at 80", hint(name, 80), HINTS[name])
+
+    # The signpost on the screen a bare `dlq` opens. It is drawn where the
+    # hints are drawn, so it gets their budget; and the word it exists for is
+    # the one that must survive the narrow phone.
+    for width in (32, 40, 80):
+        legend = list_legend(width)
+        at_most(f"the list legend fits {width} columns", len(legend), width - 2)
+        check(f"and still names settings at {width}", "settings" in legend, True)
+        check(f"and leads with its key at {width}", legend[:2], "s ")
 
     # -------------------------------------------------- the queue's own screen
     # The screen a bare `dlq` reaches, and the only one that arms the job,
