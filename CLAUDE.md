@@ -23,10 +23,14 @@ Decisions that travel with this code — each was arrived at the hard way:
   is routed before the verbs — no verb contains `://` — and `dlq.py` keeps
   its own module, flags and self-test; the dispatch in `expire_sched.main`
   is only the door.
-- **The screen is the whole queue.** Every verb that lives at both ends is
-  **one function called by both** — `do_arm`, `do_cancel`, `set_dest`,
-  `queue_run_argv` — because a screen and a command that disagree about
-  whether arming worked leave nobody able to tell.
+- **The listing is the whole queue.** The old second-level queue screen is
+  gone (2026-09-02) — `dlq`'s listing is the only screen there is, and its
+  legend keys (`n` run now, `s` settings, `l` runner log) and the settings
+  page's (`d` destinations, `j` arm/cancel) reach everything that screen used
+  to. Every verb that lives at both ends is still **one function called by
+  both** — `do_arm`, `do_cancel`, `set_dest`, `queue_run_argv` — because a
+  screen and a command that disagree about whether arming worked leave
+  nobody able to tell.
 - **`run-now` carries `--force`**, and that is what makes now mean now: it
   overrides the clock gate and nothing else — the floor, the per-item caps and
   the portal reading still decide everything they decided.
@@ -105,7 +109,7 @@ Decisions that travel with this code — each was arrived at the hard way:
   import ytdl_item off the queue root, the real module moved to the ytq
   checkout, and the shim replaces itself in `sys.modules` with the real one —
   it can go when the last pre-split item is gone.
-- **`dlq settings` / `s` on the queue screen** (2026-09-02): the window, the
+- **`dlq settings` / `s` on the main screen** (2026-09-02): the window, the
   reserve, `reserve-when-paid`, `paid-min`, `auto` and `notify-blocked` live
   in `config.json` beside the destinations, and are read at the moment they
   are used, never cached — `expire_runner.SETTINGS` is the one spec, and both
@@ -156,6 +160,21 @@ Decisions that travel with this code — each was arrived at the hard way:
   multiple of 15 minutes because that is JobScheduler's own floor for a
   periodic job — a window that is not a multiple of one would buy nothing
   beyond the nearest firing below it.
+- **The cut line in the queued list is computed, never an item** (2026-09-02).
+  `expire_runner.admit()` is the one admission rule — what a single item may
+  take in a firing, and why not — and `fire()` calls it instead of carrying
+  its own copy of the arithmetic; `plan()` is the one projection, walking a
+  night of firings against `admit()` the same way `fire()` would. The sum
+  `plan()` gives back is never more than the budget it was given, for *any*
+  ordering of the items — the self-test proves it by permutation rather than
+  trusting one order to stand for all of them. Reordering the queue moves the
+  line, never the budget: the pinned check is the user's own one-keypress
+  example, queue `one, two | three` becoming `one, three | two` after moving
+  `three` up once — the line still falls after exactly as much as the budget
+  allows, just between a different pair of names. The projection assumes
+  every firing lands, which is the same bias the README already names for
+  the pre-midnight window itself — Doze can still defer a firing the plan
+  counted on.
 
 ## Checks
 

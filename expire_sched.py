@@ -2306,6 +2306,10 @@ def _fake_facts(verdict: str = "early", **changes) -> dict:
     runner = _runner()
     current = 1_785_758_400.0  # 2026-08-03 12:00:00Z, pinned like the runner's
     deadline = current + 12 * 3600
+    window_open = current if verdict == "blind" else deadline - runner.window_seconds()
+    stop_by = (
+        runner.NO_DEADLINE if verdict == "blind" else deadline - runner.STOP_MARGIN
+    )
     facts = {
         "root": ROOT,
         "now": current,
@@ -2314,14 +2318,19 @@ def _fake_facts(verdict: str = "early", **changes) -> dict:
         "verdict": verdict,
         "detail": verdict,
         "deadline": deadline,
-        "window_open": (
-            current if verdict == "blind" else deadline - runner.window_seconds()
-        ),
-        "stop_by": (
+        "window_open": window_open,
+        "stop_by": stop_by,
+        # The working time the night has, derived from the verdict exactly as
+        # :func:`expire_runner.snapshot` derives it, so a projection drawn from
+        # a fake reading plans the same night a real one would.
+        "night_seconds": (
             runner.NO_DEADLINE
             if verdict == "blind"
-            else deadline - runner.STOP_MARGIN
+            else max(0.0, stop_by - max(current, window_open))
+            if verdict in ("go", "early", "spent")
+            else 0.0
         ),
+        "free_disk": 200 * 1024 * 1024 * 1024,
         "portal": (
             None
             if verdict in ("no-portal", "blind")
@@ -2339,6 +2348,14 @@ def _fake_facts(verdict: str = "early", **changes) -> dict:
         "rejected": [],
     }
     facts.update(changes)
+    # The three figures a projection needs from each item, filled in for any
+    # caller that did not spell them: a fake reading is handed straight to
+    # :func:`expire_runner.plan` by the screens, and an item missing one of
+    # these is a KeyError rather than a plan.
+    facts["items"] = [
+        {"partial": 0, "slice_min": runner.SLICE_MIN_BYTES, "part_bytes": 0, **item}
+        for item in facts["items"]
+    ]
     return facts
 
 

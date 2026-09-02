@@ -148,9 +148,11 @@ dlq arm
 
 Registers the job with Android's scheduler (needs the **Termux:API app**, not
 just the package). It survives reboots and Termux being killed; `dlq cancel`
-unregisters it. Both are also `a` and `c` on [the queue
-screen](#the-queue-itself), under the line that says which it currently is. `arm` registers the runner **in the checkout** whether or not
-`dlq` itself is installed, so re-arm after moving `~/dlq`.
+unregisters it. Both are also `j` on [the settings page](#settings), under the
+line that says which it currently is — arm when it says not armed, cancel
+(with a confirm, because what follows is silence) when it says armed. `arm`
+registers the runner **in the checkout** whether or not `dlq` itself is
+installed, so re-arm after moving `~/dlq`.
 
 ## Watching one download
 
@@ -186,11 +188,13 @@ dlq run-now     # run the whole queue now, without waiting for the window
 dlq run-now --blind   # ...with no portal reading, on mobile data
 ```
 
-All of these except `path` are on the screen too, under `s` — see [The queue
-itself](#the-queue-itself). The command line is what is left for the things a
-screen cannot do: `path` prints a path and nothing else, so `cd (dlq path
-ubuntu)` works; and a `dlq` with no terminal to draw on — in a pipe, or a
-script — prints the status screen rather than opening anything.
+All of these except `path` are on the main screen too — `n` and `l` sit on it
+directly, and `s` opens the rest: the window, the reserve, the destinations
+and the nightly job — see [The queue itself](#the-queue-itself). The command
+line is what is left for the things a screen cannot do: `path` prints a path
+and nothing else, so `cd (dlq path ubuntu)` works; and a `dlq` with no
+terminal to draw on — in a pipe, or a script — prints the status screen
+rather than opening anything.
 
 `dlq status` answers "is it going to download tonight, and what". It leads
 with that answer and then shows the working:
@@ -317,18 +321,20 @@ dlq ui     # or just: dlq
 terminal to draw on — it prints `dlq status` instead, which is what a bare
 `dlq` has always done.
 
-Everything that changes the queue is on this one screen: reorder, rename,
-remove, put a failed download back, give it its nights back, download one now,
-open a finished one, read its log. There are no commands for those any more —
-each of them is easier to do to a download you are looking at than to a name
-you have to type correctly first. `s` goes one level up, to the queue as a
-whole: the status, the nightly job, the destinations, the settings, and
-running the lot now — and the listing says so on a dim line of its own, on the
-screens with no download in flight to report there instead.
+The listing is the whole screen now — there is no second screen to step up
+to for the queue as a whole. Reorder, rename, remove, put a failed download
+back, give it its nights back, download one now, open a finished one, read
+its log: there are no commands for any of those — each is easier to do to a
+download you are looking at than to a name you have to type correctly first.
+`n`, `s` and `l` sit on the listing itself, on a dim legend row of their own
+where no download in flight has claimed that line instead: `n` runs the
+whole queue now, `s` opens the window, the reserve, the destinations and the
+nightly job, and `l` opens the runner's own log — see [The queue
+itself](#the-queue-itself).
 
 The listing picks and the item screen acts. `↑↓` moves, `⏎` opens whatever the
-cursor is on, and every key that changes something is on that second screen,
-under a bar naming the one download it will act on — so the download being
+cursor is on, and every key that changes one download is on that second
+screen, under a bar naming the one it will act on — so the download being
 removed is the download on the screen. `q` goes back, and again to leave; what
 was changed is printed on the terminal on the way out.
 
@@ -432,42 +438,72 @@ first one is a fact.
 
 ### The queue itself
 
-`s` on the listing opens the queue's own screen: the whole of `dlq status`,
-scrolling, with the keys that act on the queue as a whole underneath it.
+The listing leads with two lines under the title bar — the verdict, then the
+figures — the same two facts `dlq status` opens with, kept in view while you
+work the queue instead of a screen away. Inside the queued group, a line
+marks where tonight's spending stops, moving as the items around it move:
 
-| On the queue | |
-|---|---|
-| `n` | run the whole queue now — says what it will spend, and asks once |
-| `a` | arm the nightly job |
-| `c` | unregister it — asks, because what follows is silence |
-| `w` | where finished downloads go, and change either of them |
-| `s` | the window, the reserve and automatic downloads — see [Settings](#settings) |
-| `l` | the runner's own log |
+```
+ queue                            22:41Z
+ tonight: waiting, opens 23:00Z (19m)
+ 480 MiB to spend · 763 MiB expires
 
-A bare `dlq` on an empty queue comes here, because "nothing is queued" is only
-half the answer — whether the job is armed and what tonight would have spent is
-the other half.
+queued (3)
+  ubuntu-24-04      18%  1.02 GiB/5.61 GiB
+  some-talk          -   0 B/≤505 MiB
+  ── tonight ends here: 480 MiB ──────────
+  big-iso            -   0 B/≤8 GiB
+failed (1)
+  ...
+ n run now  s settings  l log
+ ↑↓ pick  ⏎ open  m move  q
+```
 
-The figures are a reading, taken when the screen was opened, and the top line
-says when. They are not re-read on a timer: the portal is a network call, and
-asking it once a second is not watching, it is hammering. What *is* live is the
-download at the bottom, which is read off a local file, and the figures are
-read again the moment a run of yours ends.
+**The cut line is computed, never an item.** It has no cursor position —
+`↑↓` and `m` skip straight over it — and it is worked out fresh from
+wherever the items are, including live while one is being moved: pick up
+`big-iso` and drag it above `some-talk`, and the line follows it down one
+step at a time, because the line is a projection of the runner's own
+admission rule (`expire_runner.admit`, the same function `fire()` calls at
+midnight) taken over the runner's own budget, run against the queue in
+whatever order it is currently in. **Moving an item across the line moves
+the line, never the budget** — reordering only changes which items the
+budget reaches first, so a night that would spend 480 MiB spends 480 MiB
+whichever way the queue is arranged; push `some-talk` above `ubuntu-24-04`
+and the line still falls wherever 480 MiB runs out, just between a different
+pair of names.
+
+When nothing would get anything tonight — the window closed, a fault
+blocking the firing, every queued item too big for what is left — the line
+moves to the top of the queued group and names why instead of a byte figure:
+`── nothing tonight: waiting for the window ──` and so on, or the first
+item's own reason when the budget itself is the problem. It shortens to
+`── tonight: 480 MiB ──` on the narrowest phones, and there is no line at all
+before the first reading has come back — the verdict line reads `tonight:
+asking zwana…` until it does.
 
 **`n` here is `dlq run-now`, and it means now.** The nightly window is a
-schedule, not a permission: pressing it ignores the window exactly as the item
-screen's `n` does, and so does `auto` being off — everything else stays, the
-reserve floor, the per-item caps, and the portal reading the whole budget is
-derived from. With the portal unreachable it is [a blind
-run](#when-the-portal-cannot-be-reached) instead, which is said on the same
-screen and asked in the same single question. The figure it names is the
-runner's own; there is no second sum worked out here. It runs detached, so
-the screen stays usable, and `x` stops it — what is downloaded is kept and
-the nightly window carries on from there.
+schedule, not a permission: pressing it ignores the window exactly as the
+item screen's `n` does, and so does `auto` being off — everything else
+stays, the reserve floor, the per-item caps, and the portal reading the
+whole budget is derived from. With the portal unreachable it is [a blind
+run](#when-the-portal-cannot-be-reached) instead, asked in the same single
+question. The figure it names is the runner's own — the same one the cut
+line already projected, never a second sum worked out here. It runs
+detached, so the listing stays usable and keeps drawing, and `x` stops it —
+what is downloaded is kept and the nightly window carries on from there.
 
-**`s` here goes one level further, to the settings** — see
-[Settings](#settings) — and its wording says whether `auto` is off, since that
-is the one setting that changes what the rest of the screen means.
+**`s` opens [Settings](#settings)** — the window, the reserve, whether
+automatic downloads run at all, the destinations and the nightly job's own
+arm/cancel all live there now. **`l` opens the runner's own log.**
+
+The header figures come from a background reading — the portal is a network
+call, and asking it on every redraw would be hammering, not watching — taken
+when the screen opens and refreshed roughly once a minute and after anything
+that changes the queue: a drop, a removal, a requeue, an `n` of your own, a
+run of yours ending. A failed refresh keeps the previous reading rather than
+blanking it, and says so on the verdict line. What *is* live regardless is a
+download in flight, read off its own local progress file.
 
 ## Where downloads go
 
@@ -479,10 +515,10 @@ dlq dest file  ~/storage/downloads
 dlq dest video default          # put the built-in default back
 ```
 
-Or `w` on [the queue screen](#the-queue-itself), which shows all three, says
-which of them is a default and whether it can be written to, and takes a new
-one in a field — `default` typed into that field puts the built-in one back.
-`v`, `a` and `f` pick which.
+Or `d` on [the settings page](#settings), which opens the destinations
+screen: shows all three, says which of them is a default and whether it can
+be written to, and takes a new one in a field — `default` typed into that
+field puts the built-in one back. `v`, `a` and `f` pick which.
 
 Three destinations, because a film, a song and an installer do not belong in
 the same folder on a phone. **Which one an item uses is decided by the row you
@@ -530,13 +566,16 @@ dlq settings notify-blocked off     # a blocked firing goes to the log only
 dlq settings window default         # put the built-in default back
 ```
 
-Or `s` on [the queue screen](#the-queue-itself) (itself reached with `s` from
-the item list), which shows the same six and takes the same changes: the
-switches toggle where they sit, and the numbers open a field, prefilled
-with what they are now — type `default` to put the built-in one back, same as
-on the command line. Each setting's key is beside its name (`w r p m a n`); on
-a short phone the screen keeps every name, value and complaint and drops the
-grey line saying what each one means.
+Or `s` on the main screen, which shows the same six and takes the same
+changes: the switches toggle where they sit, and the numbers open a field,
+prefilled with what they are now — type `default` to put the built-in one
+back, same as on the command line. Two more rows sit under those six, in the
+same layout: `d` for the destinations (see [Where downloads
+go](#where-downloads-go)) and `j` for the nightly job — armed, not armed, or
+the error stopping it from arming — which arms it when it is not armed and
+cancels it, with a confirm, when it is. Each row's key is beside its name
+(`w r p m a n d j`); on a short phone the screen keeps every name, value and
+complaint and drops the grey line saying what each one means.
 
 | setting              | default | what it does                                     |
 |----------------------|---------|---------------------------------------------------|
@@ -546,6 +585,8 @@ grey line saying what each one means.
 | `paid-min`           | 0 MB    | how much paid data `reserve-when-paid no` wants before it waives; 0 is any paid data at all |
 | `auto`               | on      | let the nightly job actually download              |
 | `notify-blocked`     | on      | a firing stopped by a fault says so on the phone   |
+| `destinations` (`d`) | Downloads | where finished files land, by kind — opens the destinations screen |
+| `nightly job` (`j`)  | armed   | arm the scheduled firing, or cancel it with a confirm |
 
 A value typed as `45`, `45m` or `2h` sets the window; `150` or `150MB` sets
 the reserve and `paid-min`; `on`, `off`, `yes`, `no`, `true`, `false`, `1` and
@@ -653,10 +694,10 @@ data
   dlq run-now --blind spends mobile data instead
 ```
 
-That last line is the way through, and it is the same bargain the screen's
-`n` strikes, taken for the queue rather than one item. It is also `n` on [the
-queue screen](#the-queue-itself), which asks the same single question with the
-same figure in it; on the command line:
+That last line is the way through, and it is the same bargain the item
+screen's `n` strikes, taken for the queue rather than one item. It is also
+`n` on [the main screen](#the-queue-itself), which asks the same single
+question with the same figure in it; on the command line:
 
 ```
 dlq run-now --blind        # run the queue with no portal reading

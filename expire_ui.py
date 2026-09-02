@@ -39,6 +39,21 @@ and nothing else, so the item being removed is the one that is on the screen.
 It also buys the room to spell each action out in words, which is what makes
 this readable at 32 columns where a row of hint keys would not be.
 
+**The listing is the whole queue.** There was a second screen above it — the
+status, the job, the destinations, the settings and the key that ran the lot —
+and it is gone: what tonight would do is two header lines on the listing
+itself, ``n``, ``s`` and ``l`` are on the listing, and the destinations and the
+nightly job are rows on the settings page. What replaces the paragraph of
+figures is one line drawn *through the queued group*, after the last download
+tonight's budget reaches. **That line is computed and is never an item**: it
+has no name, no record and no place in the order, the cursor steps over it, and
+it is worked out afresh on every draw from whatever order the items are in —
+including an order that exists nowhere but under a held item. It is
+:func:`expire_runner.plan` over :func:`expire_runner.admit`, which is the same
+rule ``fire()`` admits items by, so the screen cannot promise bytes the night
+then refuses. Moving an item across the line moves the line; it never moves the
+budget.
+
 Layout follows the rest of the queue: Termux in portrait is about 40 columns,
 the self-test checks every line of every screen down to 32, and the key hints
 are the line that must never be the one clipped — they are the way out.
@@ -86,24 +101,27 @@ WIDE = sched.WIDE
 #: shows 38 columns of them. What is dropped when the screen is narrower is
 #: chosen on ytq's rule: the word that must never be clipped is the way out.
 HINTS = {
-    "list": "↑↓ pick  ⏎ open  m move  s queue  q",
-    "list-live": "x stop  ⏎ open  m move  s queue  q",
+    # No `s queue` any more: the listing IS the queue's screen, and what `s`
+    # opens is the settings. The keys that act on the whole queue are named on
+    # the legend row instead (:data:`LEGEND_KEYS`), which leaves this line to
+    # the four that work the list itself.
+    "list": "↑↓ pick  ⏎ open  m move  q",
+    "list-live": "x stop  ⏎ open  m move  q",
     "moving": "↑↓ move it   ⏎ drop it   esc cancel",
     "item": "press a key   q back",
     # The download-now screen promises that x stops it, so x has to work on
     # the screen it was promised from and not only on the listing.
     "item-live": "x stop   press a key   q back",
-    # The queue's own screen: the status scrolls, the keys under it act.
-    "queue": "↑↓ scroll   press a key   q back",
-    "queue-live": "x stop   ↑↓ scroll   a key   q back",
     "dest": "v video  a audio  f files  q back",
     # Every setting's key is named here rather than only on the screen: these
     # are the keys that spend or stop spending, and a key that is only
     # discoverable by pressing it is not one to leave to a guess. The names
     # went when the sixth setting arrived — six names do not fit a phone — and
     # the letters stayed, because the screen carries each name beside its own
-    # letter and this line is the only place the set of them is stated.
-    "settings": "w r p m a n  each a setting   q back",
+    # letter and this line is the only place the set of them is stated. ``d``
+    # and ``j`` joined them when the queue screen went: they are rows on this
+    # page now and they answer to keys like the rest of it.
+    "settings": "w r p m a n d j  a setting  q back",
     "confirm": "y do it   any other key: no",
     # With a second answer offered, the hint has to admit it exists: "any other
     # key: no" over a screen showing a b is a screen contradicting itself.
@@ -111,18 +129,16 @@ HINTS = {
     "log": "↑↓ scroll   q back",
 }
 TIGHT_HINTS = {
-    "list": "↑↓  ⏎ open  m move  s queue  q",
-    "list-live": "x stop  ⏎ open  m  s queue  q",
+    "list": "↑↓  ⏎ open  m move  q",
+    "list-live": "x stop  ⏎ open  m  q",
     "moving": "↑↓ move  ⏎ drop  esc no",
     "item": "a key, or q back",
     "item-live": "x stop  a key  q back",
-    "queue": "↑↓  a key  q back",
-    "queue-live": "x stop  a key  q back",
     "dest": "v vid  a aud  f file  q back",
     # The same letters, and "q back" is the one thing on this line that must
     # survive the narrow phone: the screen itself carries each letter beside
     # the setting it sets.
-    "settings": "press w r p m a n  q back",
+    "settings": "press w r p m a n d j  q back",
     "confirm": "y do it  else no",
     "confirm-two": "a key above  else no",
     "log": "↑↓ scroll  q back",
@@ -134,28 +150,26 @@ def hint(name: str, width: int) -> str:
     return (TIGHT_HINTS if width < ytq.TIGHT else HINTS)[name]
 
 
-#: What ``s`` leads to, spelled out, at the two widths. Its budget is the
-#: hints' own — drawn at x=1 and clipped at ``width - 1`` — because it is
-#: drawn on the line above them and by the same rule.
-LEGEND = "s  queue: tonight, the job, settings"
-TIGHT_LEGEND = "s  queue, job, settings"
+#: The listing's whole body when there is nothing in the queue at all. A bare
+#: ``dlq`` used to bounce off an empty queue onto a message screen and then
+#: onto the queue's own; there is no queue screen now and no bounce either, so
+#: the listing says it itself and every key on it goes on working.
+EMPTY_QUEUE = "nothing queued — ytq or dlq adds something"
 
-
-def list_legend(width: int) -> str:
-    """The listing's one dim line saying where ``s`` goes.
-
-    A bare ``dlq`` opens the listing, and the only word on it for the queue's
-    own screen was the hint's ``s queue``, which does not say that the window,
-    the reserve and the nightly job are all one key further on. Nothing else on
-    the first screen a person sees says the settings exist at all.
-
-    It gets the row the foot keeps for the live line, and gives it up to both
-    of the things that outrank a signpost: **a download in flight takes it**,
-    because what is being spent now is worth more than where a key goes, and
-    **a flash takes it for the moment it is shown**, which is
-    :func:`_foot`'s own rule that what just happened comes first.
-    """
-    return LEGEND if width >= ytq.TIGHT else TIGHT_LEGEND
+#: The three keys that act on the queue as a whole, spelled out on a dim row
+#: of their own above the hints. They used to be a screen; the screen is gone
+#: and this line is what is left of its signposting.
+#:
+#: One spelling at every width: its budget is the hints' own — drawn at x=1
+#: and clipped at ``width - 1`` — and at 28 characters it already fits the
+#: narrowest phone, so there is nothing for a tight version to give up.
+#:
+#: It gets the row the foot keeps for the live line, and gives it up to both
+#: of the things that outrank a signpost: **a download in flight takes it**,
+#: because what is being spent now is worth more than where a key goes, and
+#: **a flash takes it for the moment it is shown**, which is :func:`_foot`'s
+#: own rule that what just happened comes first.
+LEGEND_KEYS = "n run now  s settings  l log"
 
 
 # --------------------------------------------------------------------------- #
@@ -931,12 +945,273 @@ def item_lines(
 
 
 # --------------------------------------------------------------------------- #
+# What tonight would download
+# --------------------------------------------------------------------------- #
+
+#: The verdict line's phrase for each of :data:`expire_sched.VERDICTS`, in the
+#: spelling a phone has room for. The *long* spelling is not here on purpose:
+#: it is the status screen's own headline, read straight out of ``VERDICTS``,
+#: so the listing and ``dlq status`` cannot come to two different words for the
+#: same night. This table only adds the short one, for the width where the
+#: headline and the clock will not both fit — and the self-test pins that every
+#: verdict has an entry, because one the gate grew and this did not would draw
+#: the narrow phone a blank where the answer goes.
+TONIGHT_SHORT = {
+    "downloading": "downloading",
+    "go": "window open",
+    "early": "waiting",
+    "late": "done tonight",
+    "empty": "nothing queued",
+    "off": "auto is off",
+    "spent": "no data to spend",
+    "blind": "PAID: no portal",
+    "no-portal": "BLOCKED: no portal",
+    "stale": "BLOCKED: stale data",
+}
+
+#: What the verdict line says before the first reading has come back. The
+#: screen opens on it, so it has to be the truth about the screen rather than
+#: about the night: nothing is known yet and something is being done about it.
+ASKING = "tonight: asking zwana…"
+
+
+def _when(facts: dict) -> tuple[str, str]:
+    """``(the clock and the countdown, the countdown alone)`` for tonight.
+
+    :func:`expire_sched._timing` says the same thing on a line of its own and
+    is the right length for one. This line carries the verdict as well and has
+    about thirty columns to do it in on a phone, so it needs a shorter form and
+    then a shorter one again. Nothing here is a second *fact*: it is the same
+    three figures out of the same snapshot, put in the order that survives
+    being clipped — the clock first, because that is the half a reader steers
+    by once the countdown is more than an hour.
+    """
+    current, window_open, stop_by = facts["now"], facts["window_open"], facts["stop_by"]
+    if stop_by == sched._runner().NO_DEADLINE:
+        return "no stop time", "no stop time"
+    if current < window_open:
+        left = sched._in(window_open - current)
+        return f"opens {sched._clock(window_open)} ({left})", f"opens in {left}"
+    if current < stop_by:
+        left = sched._in(stop_by - current)
+        return f"closes {sched._clock(stop_by)} ({left})", f"closes in {left}"
+    left = sched._in(window_open + 86_400 - current)
+    return f"opens again {sched._clock(window_open)} ({left})", f"back in {left}"
+
+
+def _pick(options: list[str], room: int) -> str:
+    """The first of *options* that fits *room*, or the last one clipped.
+
+    The listing's two header lines are each written three or four ways — the
+    verdict with the clock, the verdict alone, the short verdict — and this is
+    the one rule that chooses between them, so a line added later cannot pick
+    differently from the line above it.
+    """
+    return next(
+        (text for text in options if len(text) <= room), _fit(options[-1], room)
+    )
+
+
+def tonight_lines(facts: dict | None, width: int, live: str = "") -> list[str]:
+    """The two lines under the title bar: the verdict, then the figures.
+
+    The same two facts ``dlq status`` opens with, kept in view while the queue
+    is worked instead of a screen away — and taken from the same snapshot, so
+    the listing cannot say one thing about tonight while the status screen says
+    another. Pure: everything it needs is in *facts*, which is what lets the
+    self-test spell out a night rather than wait for one.
+
+    *live* is the download in flight if there is one, ours or a firing's. It
+    outranks every verdict for the same reason it does on the status screen:
+    what is being spent now is the answer to "what is happening", and the
+    window it is being spent inside is not.
+
+    ``None`` for *facts* is the moment the screen opens, before the reading has
+    come back. It says so rather than showing a blank or, worse, a figure of
+    zero — see :class:`Tonight`, which is what is doing the asking.
+    """
+    room = max(8, width - 2)
+    if not facts:
+        return [_fit(ASKING, room), ""]
+    verdict = "downloading" if live else facts["verdict"]
+    if live:
+        head = _fit(f"downloading now: {_slug_of(live)}", room)
+    else:
+        long = sched.VERDICTS.get(verdict, (facts["detail"], ""))[0]
+        short = TONIGHT_SHORT.get(verdict, long)
+        # An empty queue has no next state worth naming: the window opening on
+        # nothing is not a thing to wait for.
+        tails = [""] if verdict == "empty" else [f", {when}" for when in _when(facts)]
+        head = _pick(
+            [
+                f"tonight: {phrase}{tail}"
+                for tail in [*dict.fromkeys(tails), ""]
+                for phrase in (long, short)
+            ],
+            room,
+        )
+    return [head, _fit(_tonight_figures(facts, room), room)]
+
+
+def _tonight_figures(facts: dict, room: int) -> str:
+    """The second header line: what there is to spend, or why there is nothing.
+
+    Four different questions wearing one line, and which of them is being asked
+    is the verdict's business rather than this line's: with the switch off the
+    figures are beside the point and the way back on is not, with no reading
+    there are no figures at all, and on a blind run the figure is the queue's
+    own declaration and has to say whose data it is spending.
+    """
+    if facts["verdict"] == "off":
+        me = sched._me()
+        return _pick(
+            [f"{me} settings auto on turns it back on", f"{me} settings auto on"],
+            room,
+        )
+    size = ytq.human(max(0, facts["spendable"]))
+    if facts["blind"]:
+        return _pick(
+            [f"{size} on mobile data, nothing counting", f"{size} on mobile data"],
+            room,
+        )
+    doc = facts["portal"]
+    if doc is None:
+        # The portal's own words for why it did not answer. Not shortened and
+        # not replaced by "no reading": it is the only line on this screen that
+        # says what to do about it.
+        return facts["portal_problem"] or "no reading, so nothing can be spent"
+    free = ytq.human(doc["free"]["left_bytes"])
+    return _pick(
+        [
+            f"{size} to spend · {free} expires {sched._clock(facts['deadline'])}",
+            f"{size} to spend · {free} expires",
+            f"{size} to spend",
+        ],
+        room,
+    )
+
+
+def tonight_plan(order: list[str], facts: dict | None) -> list[dict]:
+    """What each queued item would get tonight, in the order it is given.
+
+    :func:`expire_runner.plan` and nothing else — **the runner's own
+    projection, over the runner's own budget**. That is the whole safety of the
+    cut line: the rule that decides which items the night reaches is
+    :func:`expire_runner.admit`, the same function ``fire()`` calls at
+    midnight, so a line drawn here cannot promise bytes the night then refuses.
+    A second copy of the arithmetic would be a screen committing more than the
+    queue will spend, which is the one thing this exists to prevent.
+
+    The order is the screen's, which is the point: the items are handed over in
+    whatever order they are on the screen — including an order that exists
+    nowhere but under a held item — and what comes back is what *that* order
+    would download. The budget is not the screen's to change.
+
+    An item the reading does not know about — queued since it was taken — is
+    not in the projection at all, and so gets nothing tonight until the next
+    reading. Saying anything else would be inventing a cap for it.
+
+    No ``state.json`` is passed: a snapshot's items carry their own
+    ``part_bytes``, which is the only thing :func:`plan` reads a state for.
+    """
+    if not facts:
+        return []
+    known = {item["name"]: item for item in facts["items"]}
+    return sched._runner().plan(
+        [known[name] for name in order if name in known],
+        {},
+        facts["spendable"],
+        facts["bps"],
+        facts["night_seconds"],
+        facts["blind"],
+        facts["free_disk"],
+    )
+
+
+def _rule(spellings: list[str], width: int) -> str:
+    """``── text ─────`` across the listing, in the fullest spelling that fits.
+
+    Ordered longest first, and the last one is the one that has to fit any
+    phone — a rule with nothing readable on it is worse than no rule, since it
+    is drawn *between* two downloads and would read as a separator.
+    """
+    room = max(8, width - 1)
+    text = _pick(spellings, room - 6)
+    drawn = f"── {text} "
+    return _fit(drawn + "─" * max(2, room - len(drawn)), room)
+
+
+def cut_index(
+    order: list[str], facts: dict | None, width: int
+) -> tuple[int | None, str]:
+    """``(how many queued items tonight reaches, the line to say so)``.
+
+    The cut line, and it is **computed rather than an item**: it has no name,
+    no record and no place in the order — it is worked out afresh from wherever
+    the items are, every draw, including live from a preview order while one of
+    them is being held. Nothing about it can be picked up, dropped, renamed or
+    removed, which is why the cursor never stops on it.
+
+    The count is the position after the last item that gets any bytes, so what
+    the line means is exactly "nothing below this gets anything tonight". That
+    is not always the same as counting the items that got something: an item
+    can be passed over for a reason of its own — too big for what is left, no
+    disk — while a smaller one behind it still runs, and drawing the line by
+    the count would put an item that downloads below a line saying it does not.
+
+    ``None`` when there is no reading yet: an honest listing with no line is
+    better than a line drawn from figures nobody has.
+
+    When nothing gets anything the line goes to the top of the queued group and
+    says why, which is the only place the answer can be. A verdict that stops
+    the whole night is quoted in the status screen's own words; otherwise it is
+    the first refusal :func:`expire_runner.admit` gave, which is the runner
+    explaining itself in the same sentence it would log.
+    """
+    if not facts or not order:
+        return None, ""
+    planned = tonight_plan(order, facts)
+    got = {entry["name"]: entry["bytes"] for entry in planned}
+    last = -1
+    for position, name in enumerate(order):
+        if got.get(name, 0):
+            last = position
+    if last >= 0:
+        total = ytq.human(sum(got.values()))
+        return last + 1, _rule(
+            [f"tonight ends here: {total}", f"tonight: {total}"], width
+        )
+    verdict = facts["verdict"]
+    if verdict in (*sched._runner().GATE_GO, "early"):
+        # The night is one that downloads, so the answer is about the items:
+        # the runner's own first refusal, word for word.
+        why = next(
+            (entry["reason"] for entry in planned if entry["reason"]),
+            "nothing fits tonight",
+        )
+    else:
+        why = sched.VERDICTS.get(verdict, (facts["detail"], ""))[0]
+    # Three spellings, because a refusal out of `admit` carries its working in
+    # brackets — "(budget 0 B, 3122s left)" — and that is the half worth losing
+    # first: the sentence in front of it is the answer, the bracket is how it
+    # was arrived at.
+    return 0, _rule(
+        [f"nothing tonight: {why}", f"nothing tonight: {why.split(' (')[0]}",
+         "nothing tonight"],
+        width,
+    )
+
+
+# --------------------------------------------------------------------------- #
 # The listing, with a cursor on it
 # --------------------------------------------------------------------------- #
 
 
 def compose_rows(
-    rows: list[dict], width: int, live: str = ""
+    rows: list[dict],
+    width: int,
+    live: str = "",
+    cut: tuple[int, str] | None = None,
 ) -> list[tuple[int | None, list[str]]]:
     """The whole listing as ``(which row, its lines)``, headings included.
 
@@ -946,6 +1221,13 @@ def compose_rows(
     self-test pins that, because a download missing from this screen looks
     exactly like a download that is not there, and this is the screen someone
     removes things from.
+
+    *cut* is :func:`cut_index`'s answer: ``(how many queued rows tonight
+    reaches, the line to draw)``. It is emitted **as a heading** — index
+    ``None``, exactly like ``queued (3)`` — which is the whole of how the cut
+    line stays computed rather than becoming an item: the cursor skips it,
+    :func:`landed_index` cannot land on it, and no row's index moves because it
+    is there. The self-test pins both halves.
 
     Two shapes, on the same rule the listing uses: one line each while the
     name, the state and the figures fit together, and two lines each when they
@@ -982,7 +1264,9 @@ def compose_rows(
         if not group:
             continue
         out.append((None, [f"{where} ({len(group)})"]))
-        for index in group:
+        for at, index in enumerate(group):
+            if cut and where == "queued" and at == cut[0]:
+                out.append((None, [cut[1]]))
             name, state, progress, note = cells[index]
             if tight:
                 figures = f"{state:>{state_w}}  {progress}"
@@ -1000,6 +1284,11 @@ def compose_rows(
             if note_w >= 14:
                 line += f"  {_fit(note, note_w)}"
             out.append((index, [line[:room].rstrip()]))
+        # A night that reaches every queued item still gets its line, at the
+        # foot of the group: "all of this goes tonight" is an answer, and a
+        # missing line reads as a screen that did not work it out.
+        if cut and where == "queued" and cut[0] >= len(group):
+            out.append((None, [cut[1]]))
     return out
 
 
@@ -1064,10 +1353,18 @@ def draw_list(
 ) -> int:
     """Draw the listing and return the line it was scrolled to.
 
-    The spare row above the keys carries :func:`list_legend` on the screens
+    Four lines are laid down before the downloads: the title bar, the two
+    header lines saying what tonight would do (:func:`tonight_lines`), and a
+    blank. Inside the queued group the cut line says where tonight's spending
+    stops, and it is worked out **here, every draw, from the order on the
+    screen** — which is what makes it follow a held item as ↑↓ move it, and
+    what makes it recompute after a drop without anything having to remember
+    to ask.
+
+    The spare row above the keys carries :data:`LEGEND_KEYS` on the screens
     that have nothing else to say there — no download in flight, no flash,
     nothing in the air — because this is the screen a bare ``dlq`` opens and
-    the settings are two keys away from it.
+    everything the old queue screen did is behind those three keys.
     """
     win.erase()
     height, width = win.getmaxyx()
@@ -1087,9 +1384,27 @@ def draw_list(
                 else " queue "
             ),
         )
-    entries = compose_rows(shown, width, queue.live)
-    flat = [(index, line) for index, lines in entries for line in lines]
-    listed = max(1, height - 5)
+    facts = queue.tonight.facts
+    header = tonight_lines(facts, width, queue.live)
+    if queue.tonight.note:
+        # A reading that failed keeps the figures the last one gave and says so
+        # where the verdict goes: stale figures with a word about them are
+        # worth more than a screen that has gone blank.
+        header[0] = _fit(queue.tonight.note, width - 2)
+    for offset, text in enumerate(header):
+        _addstr(win, 1 + offset, 1, text, curses.A_BOLD if not offset else 0)
+    order = [row["name"] for row in shown if row["where"] == "queued"]
+    reaches, ruled = cut_index(order, facts, width)
+    entries = compose_rows(
+        shown, width, queue.live, None if reaches is None else (reaches, ruled)
+    )
+    flat = [(index, text) for index, lines in entries for text in lines]
+    listed = max(1, height - 7)
+    if not flat:
+        # An empty queue is a listing with nothing in it, not a different
+        # screen: the header still says what tonight would do, and every key
+        # still works.
+        flat = [(None, text) for text in _wrap(EMPTY_QUEUE, width - 2)]
     mine = [line for line, (index, _) in enumerate(flat) if index == cursor]
     if mine:
         top = min(top, mine[0])
@@ -1107,11 +1422,11 @@ def draw_list(
         else:
             attr = paint.get(_tone(shown[index]), 0)
         _addstr(
-            win, 2 + offset, 0, text.ljust(width - 1) if index == cursor else text, attr
+            win, 4 + offset, 0, text.ljust(width - 1) if index == cursor else text, attr
         )
     live = "" if moving else queue.live_line(width)
     if not moving and not live and not flash:
-        _addstr(win, height - 3, 1, _fit(list_legend(width), width - 2), curses.A_DIM)
+        _addstr(win, height - 3, 1, _fit(LEGEND_KEYS, width - 2), curses.A_DIM)
     _foot(
         win,
         paint,
@@ -1137,6 +1452,12 @@ def list_screen(
     in this list*: it is picked up here, moved with the same two keys that were
     already moving the cursor, and dropped. Nothing is renamed until it is
     dropped, and everything else is locked out while it is in the air.
+
+    This is also the whole queue's screen now. ``n`` runs it, ``s`` opens the
+    settings and ``l`` the runner's log — the three keys the queue's own screen
+    used to hold, on the screen a bare ``dlq`` opens rather than one further
+    in. Each of them re-asks what tonight would do afterwards, because each of
+    them can change the answer.
     """
     top = 0
     moving = start_moving
@@ -1146,12 +1467,24 @@ def list_screen(
         pos = queued.index(moving) if moving in queued else 0
     while True:
         cursor = max(0, min(cursor, len(queue.rows) - 1))
+        # Taken here and nowhere else: the thread only ever fills a slot, and
+        # the facts the screen draws from are the ones this line assigned.
+        queue.tonight.collect()
+        queue.tonight.refresh()
         top = draw_list(win, paint, queue, cursor, top, flash, moving, pos)
         # Blocking while nothing is moving, so an idle screen costs no wakeups
-        # at all; a second is fast enough to watch a download by. Not while an
-        # item is in the air: a redraw underneath a move would be the queue
+        # at all; a second is fast enough to watch a download by. A quarter of
+        # one while a reading is in the air, so the header fills itself in when
+        # it lands rather than at the next keypress. Not otherwise while an
+        # item is being moved: a redraw underneath a move would be the queue
         # rearranging itself around a decision that has not been taken.
-        win.timeout(1000 if queue.moving() and not moving else -1)
+        if queue.tonight.pending:
+            wait = 250
+        elif queue.moving() and not moving:
+            wait = 1000
+        else:
+            wait = -1
+        win.timeout(wait)
         try:
             key = win.getch()
         finally:
@@ -1175,6 +1508,8 @@ def list_screen(
                     queue.receipts.append(said)
                 dropped, moving, flash = moving, "", said
                 queue.read()
+                if moved:
+                    queue.tonight.start()
                 # A drop that moved something renamed it, so the cursor
                 # follows the POSITION it was dropped at (landed_index); one
                 # that did not still knows the name it kept.
@@ -1192,11 +1527,17 @@ def list_screen(
         if key == -1:
             # A download's figures are a second old at worst, and the row it is
             # on stays under the cursor even if the queue reordered underneath.
+            mine_was = queue.mine()
             name = queue.rows[cursor]["name"] if queue.rows else ""
             queue.read()
             found = queue.index_of(name)
             cursor = cursor if found is None else found
             flash = queue.said()
+            if mine_was and not queue.mine():
+                # A run of ours ending is the one moment the figures behind
+                # this screen really do change, and the moment someone is
+                # watching for.
+                queue.tonight.start()
             continue
         if key in (ord("q"), 27):
             return "quit", cursor
@@ -1232,10 +1573,22 @@ def list_screen(
         elif key in (curses.KEY_ENTER, 10, 13, curses.KEY_RIGHT):
             if queue.rows:
                 return "open", cursor
+        elif key == ord("n"):
+            flash, started = run_now(win, paint, queue)
+            if started:
+                queue.receipts.append(flash)
+            queue.read()
+            queue.tonight.start()
         elif key == ord("s"):
-            # The queue itself rather than a download in it: what tonight
-            # would do, and the keys that act on the whole of it.
-            return "queue", cursor
+            flash, changed = settings_screen(win, paint)
+            if changed:
+                queue.receipts.append(flash)
+                # The window, the reserve and the switch all change what
+                # tonight would download, so the line above the list is wrong
+                # until it has been asked again.
+                queue.tonight.start()
+        elif key == ord("l"):
+            runner_log(win, paint)
         elif 32 <= key < 127:
             # Every key that changes a download is on the download's own
             # screen, and pressing one here used to do nothing at all.
@@ -1528,17 +1881,93 @@ def waiting(win, paint: dict, title: str, note: str, work):
             return "left", ""
 
 
-def queue_facts(force: bool = False, blind: bool = False) -> dict:
-    """Everything the queue screen draws, gathered in one go.
+def tonight_facts(force: bool = False, blind: bool = False) -> dict:
+    """What the runner says about tonight — its snapshot, straight across.
 
-    The snapshot and the job registration together, because they are read
-    behind one wait and neither is worth a second one. Both come from
-    ``expire_sched``/``expire_runner`` unchanged: this screen decides nothing
-    about the queue, it only draws what the runner would do and offers the
-    keys that change it.
+    One door, so that everything on this screen that talks about tonight — the
+    two header lines, the cut line, the figure the run-now confirm names — is
+    reading one set of figures taken at one moment. This screen decides nothing
+    about the queue; it draws what the runner would do and offers the keys that
+    change it.
     """
-    runner = sched._runner()
-    return {"facts": runner.snapshot(force=force, blind=blind), "job": sched.job_rows()}
+    return sched._runner().snapshot(force=force, blind=blind)
+
+
+class Tonight:
+    """The reading the main screen draws from, taken off the main screen.
+
+    :func:`expire_runner.snapshot` reads the crew portal, which is a network
+    call over a phone's wifi and takes a second or several. The listing is
+    redrawn on every keypress, so calling it inline would be a screen that
+    freezes each time somebody presses ↓. It is done in a daemon thread
+    instead, and the listing draws whatever the last one brought back.
+
+    **The thread never touches** :attr:`facts`. It fills a slot; the main
+    thread empties it in :meth:`collect`, which is the only line in the program
+    that assigns the facts the screen is drawn from. That is the whole of the
+    thread safety here, and it is worth saying rather than assuming: curses
+    draws from one thread, and a screen that read a half-assigned reading would
+    be a screen showing figures that were never true together.
+
+    A read that raises keeps the reading that is already there and leaves a
+    line saying so. Blanking the figures because one refresh failed would throw
+    away the only answer the screen has, and an old reading with a word about
+    it is worth more than no reading at all.
+    """
+
+    #: How old a reading may get before the screen quietly asks for another.
+    #: Longer than a redraw by a long way — the portal is a network call and
+    #: asking it on every draw is hammering, not watching — and shorter than
+    #: the window, so a screen left open through 23:00Z sees it open.
+    STALE = 60.0
+
+    def __init__(self) -> None:
+        self.facts: dict | None = None
+        #: What to say instead of the verdict, when the last read failed.
+        self.note = ""
+        self.taken = 0.0
+        self._answer: list[dict] = []
+        self._trouble: list[str] = []
+        self._worker: threading.Thread | None = None
+
+    @property
+    def pending(self) -> bool:
+        """Whether a reading is in the air. The screen polls while it is."""
+        return self._worker is not None and self._worker.is_alive()
+
+    def start(self) -> None:
+        """Ask for a fresh reading, unless one is already on its way."""
+        if self.pending:
+            return
+        self._answer, self._trouble = [], []
+
+        def run() -> None:
+            try:
+                self._answer.append(tonight_facts())
+            except Exception as exc:  # noqa: BLE001 - a screen may not die of one
+                self._trouble.append(f"{type(exc).__name__}: {exc}")
+
+        self._worker = threading.Thread(target=run, daemon=True)
+        self._worker.start()
+
+    def refresh(self) -> None:
+        """Ask again if what is on the screen has gone stale."""
+        if not self.pending and time.monotonic() - self.taken >= self.STALE:
+            self.start()
+
+    def collect(self) -> bool:
+        """Take a finished reading, on the main thread. ``True`` if it landed."""
+        if self._worker is None or self._worker.is_alive():
+            return False
+        self._worker = None
+        self.taken = time.monotonic()
+        if self._answer:
+            self.facts = self._answer.pop()
+            self.note = ""
+            return True
+        if self._trouble:
+            self.note = _fit(f"tonight: could not read it — {self._trouble.pop()}", 200)
+        return False
 
 
 def armed(job: list[tuple[str, str, str]]) -> bool:
@@ -1553,53 +1982,8 @@ def armed(job: list[tuple[str, str, str]]) -> bool:
     return any(text.startswith(sched.ARMED) for _, text, _ in job)
 
 
-def queue_lines(gathered: dict, width: int) -> list[str]:
-    """The status screen, as plain lines for curses to draw.
-
-    :func:`expire_sched.compose_status` and nothing else — the same composing
-    the command line prints and the runner's own ``--status`` draws through.
-    A third layout of these figures is how two screens end up disagreeing
-    about what tonight will spend.
-    """
-    return [
-        plain
-        for plain, _ in sched.compose_status(
-            gathered["facts"], width, lambda text, tone="": text, gathered["job"]
-        )
-    ]
-
-
-def queue_actions(gathered: dict) -> dict[str, str]:
-    """The keys the queue screen offers, and what each one says it does.
-
-    **Every key is always taken**, on the rule :func:`removal_answers` exists
-    for: a key that is live on one visit and silently does nothing on the next
-    is worse than one that is not there. What changes is the wording — "arm the
-    nightly job" against "already armed; register it again" — and pressing one
-    that has nothing to do says so.
-    """
-    facts, job = gathered["facts"], gathered["job"]
-    queued = len(facts["items"])
-    return {
-        "n": f"run the queue now ({queued})" if queued else "nothing queued to run",
-        "a": "armed; register it again" if armed(job) else "arm the nightly job",
-        "c": "unregister the job" if armed(job) else "not armed to unregister",
-        "w": "where finished files go",
-        # The switch is said on the key that changes it, because this screen is
-        # where somebody wonders why nothing downloaded: a verdict of "off" at
-        # the top and a plain "settings" underneath make the reader hunt for
-        # the connection between them.
-        "s": (
-            "settings: window, reserve"
-            if sched._runner().auto_enabled()
-            else "auto is OFF; settings"
-        ),
-        "l": "the runner's log",
-    }
-
-
 def run_note(facts: dict) -> list[str]:
-    """What the run-the-queue screen says. The number is the whole point.
+    """What the run-the-queue confirm says. The number is the whole point.
 
     The same question the item screen's ``n`` asks, asked of the whole queue,
     and answered from the runner's own figures: :func:`expire_runner.snapshot`
@@ -1890,10 +2274,10 @@ def _act_now(win, paint, queue, row) -> tuple[str, bool, str]:
     return said if seen else f"{said} — NOT COUNTED", True, row["name"]
 
 
-def _qact_run(win, paint, queue, gathered) -> tuple[str, bool]:
+def run_now(win, paint, queue) -> tuple[str, bool]:
     """Run the whole queue now: ask once, with the figures, then let it go.
 
-    Once. This is the queue-level spelling of the item screen's ``n`` and it
+    Once. This is the whole-queue spelling of the item screen's ``n`` and it
     makes the same bargain — the number is said, the counting is said, and one
     key answers it. What it deliberately does not do is ask again for the
     blind case: an unreachable portal changes what the screen says, never how
@@ -1908,6 +2292,10 @@ def _qact_run(win, paint, queue, gathered) -> tuple[str, bool]:
     """
     if queue.moving():
         return "something is downloading already", False
+    if not any(row["where"] == "queued" for row in queue.rows):
+        # Said here rather than by a portal reading that would say it a second
+        # later: an empty queue is the one refusal this screen already knows.
+        return "nothing queued to run", False
     problem = busy_problem()
     if problem:
         return problem, False
@@ -1944,7 +2332,13 @@ def _qact_run(win, paint, queue, gathered) -> tuple[str, bool]:
     return said if seen else f"{said} — NOT COUNTED", True
 
 
-def _qact_arm(win, paint, queue, gathered) -> tuple[str, bool]:
+def arm_job(win, paint) -> tuple[str, bool]:
+    """Register the nightly job — :func:`expire_sched.do_arm`, and nothing else.
+
+    The same function ``dlq arm`` calls, which is the rule every verb living at
+    both ends is under: a screen and a command that disagree about whether
+    arming worked leave nobody able to tell.
+    """
     state, said = waiting(
         win, paint, " arm ", "asking Android's scheduler…", sched.do_arm
     )
@@ -1958,15 +2352,15 @@ def _qact_arm(win, paint, queue, gathered) -> tuple[str, bool]:
     return text, worked
 
 
-def _qact_cancel(win, paint, queue, gathered) -> tuple[str, bool]:
+def cancel_job(win, paint, job) -> tuple[str, bool]:
     """Unregister the job — the one action here whose damage is silence.
 
     Confirmed not because it is hard to undo, but because what follows is
     nothing at all: no firing, no log, no notification, and a queue that looks
     exactly like a queue waiting for tonight.
     """
-    if not armed(gathered["job"]):
-        return "it is not armed; a is what registers it", False
+    if not armed(job):
+        return "it is not armed; j registers it", False
     if not confirm(
         win,
         paint,
@@ -1991,19 +2385,13 @@ def _qact_cancel(win, paint, queue, gathered) -> tuple[str, bool]:
     return text, worked
 
 
-def _qact_dest(win, paint, queue, gathered) -> tuple[str, bool]:
-    return dest_screen(win, paint)
+def runner_log(win, paint) -> None:
+    """The runner's own reasoning about the whole queue — ``l`` on the listing.
 
-
-def _qact_settings(win, paint, queue, gathered) -> tuple[str, bool]:
-    # `s` on the *list* screen means "the queue screen", so from the list it is
-    # pressed twice to get here. Left as it is on purpose: `s` is the letter
-    # for settings, and the second press is on the screen the settings belong
-    # to rather than on a listing of downloads.
-    return settings_screen(win, paint)
-
-
-def _qact_log(win, paint, queue, gathered) -> tuple[str, bool]:
+    Not an item's log, which is ``l`` on the item screen and says what one
+    download was doing. This is the file that says why a night did or did not
+    happen, and it is the answer to the question the header lines raise.
+    """
     path = sched.LOGS / "runner.log"
     if not path.is_file():
         ytq.message(
@@ -2014,22 +2402,8 @@ def _qact_log(win, paint, queue, gathered) -> tuple[str, bool]:
                 "an item's own log is l on its screen",
             ],
         )
-        return "", False
+        return
     file_screen(win, paint, path)
-    return "", False
-
-
-#: Key to what it does, for the queue as a whole. Pinned against
-#: :func:`queue_actions` by the self-test, exactly as :data:`ACTS` is against
-#: :func:`actions_for`: an offered key that does nothing cannot ship.
-QACTS = {
-    "n": _qact_run,
-    "a": _qact_arm,
-    "c": _qact_cancel,
-    "w": _qact_dest,
-    "s": _qact_settings,
-    "l": _qact_log,
-}
 
 
 #: One key per destination, in :data:`expire_runner.DEST_KINDS` order. Spelled
@@ -2122,8 +2496,51 @@ def dest_screen(win, paint: dict) -> tuple[str, bool]:
 #: way out and the way to stop a download everywhere else in the queue.
 SETTING_KEYS = (ord("w"), ord("r"), ord("p"), ord("m"), ord("a"), ord("n"))
 
+#: The two rows that are not settings in ``config.json`` but belong on this
+#: page all the same — they are the rest of what the queue's own screen used to
+#: hold, and each of them is a thing you set once and then forget. ``d`` opens
+#: :func:`dest_screen`; ``j`` arms the nightly job or unregisters it. They are
+#: laid out exactly as the six above them and :func:`settings_body` counts them
+#: as settings, so neither can be the row that scrolls off a short phone.
+PAGE_KEYS = (ord("d"), ord("j"))
 
-def settings_lines(width: int) -> list[tuple[int, str, str]]:
+
+def _page_rows(job: list[tuple[str, str, str]] | None) -> list[tuple[str, str, str]]:
+    """``(name, value, what it means)`` for the ``d`` and ``j`` rows.
+
+    The destinations are one row rather than three: three paths is the
+    destinations *screen*, and this page's job is to say whether they are worth
+    opening. One folder for all three kinds is the common case and is worth
+    naming; anything else is a count and a key.
+
+    The job's own words are :func:`expire_sched.job_rows`', unchanged — the
+    same text ``dlq status`` prints, so this page and that one cannot disagree
+    about whether the nightly firing is registered. It is read once on the way
+    in rather than per draw, because ``termux-job-scheduler`` can take seconds.
+    """
+    dests = sched._runner().dests()
+    folders = {str(path) for path in dests.values()}
+    return [
+        (
+            "destinations",
+            (
+                sched._short(next(iter(dests.values())))
+                if len(folders) == 1
+                else f"{len(folders)} folders"
+            ),
+            "where finished downloads are moved to",
+        ),
+        (
+            "nightly job",
+            job[0][1] if job else "not read",
+            "the firing that downloads while you sleep",
+        ),
+    ]
+
+
+def settings_lines(
+    width: int, job: list[tuple[str, str, str]] | None = None
+) -> list[tuple[int, str, str]]:
     """The settings screen's body: ``(indent, text, tone)`` per line.
 
     Pure and separate from the screen that draws it, on this file's rule about
@@ -2174,10 +2591,17 @@ def settings_lines(width: int) -> list[tuple[int, str, str]]:
                     f"✗ config.json says {stored!r}: {problem}", width - 6, "  "
                 )
             ]
+    for letter, (name, value, label) in zip(PAGE_KEYS, _page_rows(job), strict=True):
+        lines.append((0, "", ""))
+        head = f"{chr(letter)}  {name}  {value}"
+        lines.append((2, _fit(head, width - 4), "head"))
+        lines += [(5, text, "90") for text in _wrap(label, width - 6, "  ")]
     return lines
 
 
-def settings_body(width: int, height: int) -> list[tuple[int, str, str]]:
+def settings_body(
+    width: int, height: int, job: list[tuple[str, str, str]] | None = None
+) -> list[tuple[int, str, str]]:
     """:func:`settings_lines` cut down to what a screen this tall can show.
 
     The screen's own rule, kept out here so it is checked rather than trusted:
@@ -2188,15 +2612,20 @@ def settings_body(width: int, height: int) -> list[tuple[int, str, str]]:
 
     Two things are given up, in this order. The blank lines between the blocks
     go first, because they cost nothing but air. If it still does not fit —
-    which is a 20-row phone at 32 columns, where six settings' meanings wrap to
-    two lines each — the grey line under each setting goes too, and what is
-    left is every setting's key, name and value, plus anything red. That is the
-    trade this screen makes: the word behind a value ("set" or "default") and
-    what the setting means are worth giving up, since the meaning is in the
-    docs and on the wide screen; a figure the phone is going to spend by, and a
-    value ``config.json`` holds that is being ignored, are not.
+    which is a 20-row phone at 32 columns, where eight rows' meanings wrap to
+    two lines each — the grey line under each row goes too, and what is left is
+    every row's key, name and value, plus anything red. That is the trade this
+    screen makes: the word behind a value ("set" or "default") and what the
+    setting means are worth giving up, since the meaning is in the docs and on
+    the wide screen; a figure the phone is going to spend by, and a value
+    ``config.json`` holds that is being ignored, are not.
+
+    ``d`` and ``j`` count as settings here: they are not in ``config.json``,
+    but a row nobody knows is there is the same failure whichever file it comes
+    from — and ``j`` is the one that says whether anything downloads at night
+    at all.
     """
-    body = settings_lines(width)
+    body = settings_lines(width, job)
     room = height - 6
     if len(body) > room:
         body = [line for line in body if line[1]]
@@ -2222,18 +2651,31 @@ def settings_screen(win, paint: dict) -> tuple[str, bool]:
     which is the word ``default`` typed into the same field.
 
     A change returns, the way a destination does, so that what it now says
-    lands in the receipts and the queue's own screen is re-read with it in
-    force: turning automatic downloads off changes the verdict at the top of
-    that screen, and it should be seen to.
+    lands in the receipts and the listing's header is re-read with it in force:
+    turning automatic downloads off changes the verdict at the top of that
+    screen, and it should be seen to.
+
+    ``d`` and ``j`` are the two rows that are not values in ``config.json``.
+    They do not return, because what they change is *on this page* — the
+    destinations row and the job row are what they change — so the answer is
+    shown where the question was asked, and the receipt is carried out on the
+    way past instead.
     """
     runner = sched._runner()
     flash = ""
+    changed = False
+    state, job = waiting(
+        win, paint, " settings ", "asking Android's scheduler…", sched.job_rows
+    )
+    # A scheduler that will not answer is not a reason to withhold the window
+    # and the reserve: the page draws, and the job row says what happened.
+    job = job if state == "ok" else [("job", f"could not read it: {job}", "1;31")]
     while True:
         win.erase()
         height, width = win.getmaxyx()
         _bar(win, paint, " settings ")
         line = 2
-        body = settings_body(width, height)
+        body = settings_body(width, height, job)
         for indent, text, tone in body:
             if line >= height - 4:
                 break
@@ -2246,7 +2688,28 @@ def settings_screen(win, paint: dict) -> tuple[str, bool]:
         win.refresh()
         key = win.getch()
         if key in (ord("q"), 27, curses.KEY_LEFT):
-            return flash, False
+            return flash, changed
+        if key == ord("d"):
+            said, moved = dest_screen(win, paint)
+            flash, changed = said, changed or moved
+            continue
+        if key == ord("j"):
+            said, worked = (
+                cancel_job(win, paint, job) if armed(job) else arm_job(win, paint)
+            )
+            flash, changed = said, changed or worked
+            if worked:
+                # The row above says whether it is armed, and the answer just
+                # moved: ask the scheduler again rather than draw the old one.
+                state, fresh = waiting(
+                    win,
+                    paint,
+                    " settings ",
+                    "asking Android's scheduler…",
+                    sched.job_rows,
+                )
+                job = fresh if state == "ok" else job
+            continue
         picked = dict(zip(SETTING_KEYS, runner.SETTINGS, strict=False)).get(key)
         if picked is None:
             flash = "that key does nothing here" if 32 <= key < 127 else ""
@@ -2280,79 +2743,6 @@ def settings_screen(win, paint: dict) -> tuple[str, bool]:
             now = runner.spell_setting(picked, runner.settings()[picked])
             _note(f"{picked} is now {now}")
             return flash, True
-
-
-def queue_screen(win, paint: dict, queue, gathered: dict, flash: str) -> str:
-    """The queue as a whole: the status screen, and the keys that change it.
-
-    The item screen's shape, one level up — the facts at the top, the actions
-    spelled out in words underneath, and the keys never on a screen that is
-    showing something else. The status scrolls because it is longer than a
-    phone; the actions do not, because they are the way out and the way out is
-    never the thing that scrolls off.
-    """
-    top = 0
-    while True:
-        acts = queue_actions(gathered)
-        win.erase()
-        height, width = win.getmaxyx()
-        _bar(win, paint, " the queue ")
-        # Two narrower than the window: one for the column it is drawn in and
-        # one for the cell curses will not let anything be written into. A line
-        # composed to the full width loses its last character, and the last
-        # character of the top line is the Z on the time.
-        body = queue_lines(gathered, width - 2)
-        room = max(1, height - 5 - len(acts))
-        top = max(0, min(top, max(0, len(body) - room)))
-        for offset in range(room):
-            if top + offset >= len(body):
-                break
-            _addstr(win, 2 + offset, 1, body[top + offset])
-        at = max(2 + room, height - 3 - len(acts))
-        for key, label in acts.items():
-            if at >= height - 3:
-                break
-            _addstr(win, at, 2, key, curses.A_BOLD | paint.get("head", 0))
-            _addstr(win, at, 5, _fit(label, width - 7))
-            at += 1
-        _foot(
-            win,
-            paint,
-            flash,
-            hint("queue-live" if queue.mine() else "queue", width),
-            queue.live_line(width),
-        )
-        win.refresh()
-
-        win.timeout(1000 if queue.moving() else -1)
-        try:
-            key = win.getch()
-        finally:
-            win.timeout(-1)
-        if key == -1:
-            return "tick"
-        if key in (ord("q"), 27, curses.KEY_LEFT):
-            return "q"
-        if key == ord("x") and queue.mine():
-            queue.stop_mine()
-            flash = "stopping it; what is downloaded is kept"
-            continue
-        if key in (curses.KEY_UP, ord("k")):
-            top -= 1
-        elif key in (curses.KEY_DOWN, ord("j")):
-            top += 1
-        elif key == curses.KEY_NPAGE:
-            top += room
-        elif key == curses.KEY_PPAGE:
-            top -= room
-        elif key == curses.KEY_HOME:
-            top = 0
-        elif key == curses.KEY_END:
-            top = len(body)
-        elif 0 <= key < 256 and chr(key) in acts:
-            return chr(key)
-        elif 32 <= key < 127:
-            flash = "that key does nothing here"
 
 
 #: Keys the *screen* handles rather than the item: moving a download is the one
@@ -2397,12 +2787,15 @@ class Queue:
         self.running = ytq.Running()
         #: The whole-queue run this screen started, if it started one.
         self.firing = Firing()
+        #: What tonight would download, read off the screen's own thread.
+        self.tonight = Tonight()
         self.rows: list[dict] = []
         self.live = ""
         #: What this session changed, printed once curses is torn down.
         self.receipts: list[str] = []
         self._forgot: list[str] = []
         self.read()
+        self.tonight.start()
 
     def read(self) -> None:
         self.rows = sched.items()
@@ -2444,10 +2837,11 @@ class Queue:
     def mine(self) -> bool:
         """Whether what is running is this screen's to stop.
 
-        Both spellings of it: one download started with ``n``, and the whole
-        queue started from the queue screen. A nightly firing is neither, and
-        ``x`` must not offer to stop one — saying "stopping it" over a
-        download that carries on is worse than the key doing nothing.
+        Both spellings of it: one download started with ``n`` on the item
+        screen, and the whole queue started with ``n`` on the listing. A
+        nightly firing is neither, and ``x`` must not offer to stop one —
+        saying "stopping it" over a download that carries on is worse than
+        the key doing nothing.
         """
         return self.running.alive or self.firing.alive
 
@@ -2491,6 +2885,12 @@ class Queue:
 def app(win) -> list[str]:
     """The whole screen: pick something, then do something to it.
 
+    Two screens, and the listing is the first one — there is no third to step
+    up to any more. What the queue's own screen held is on the listing (``n``,
+    ``s``, ``l``) and behind ``s`` (the destinations, the nightly job), so an
+    empty queue no longer bounces anywhere: it is a listing with nothing in it,
+    under a header that still says what tonight would have done.
+
     Returns the changes made, to be printed once curses is torn down — the
     same shape ytq uses, and for the same reason: what a session did should
     survive the screen it did it on, because the terminal is where anyone
@@ -2507,88 +2907,16 @@ def app(win) -> list[str]:
     flash = queue.said()
     screen = "list"
     pick_up = ""
-    #: The status behind the queue screen, re-read after anything that changes
-    #: what it would say. ``None`` means "read it before drawing".
-    gathered: dict | None = None
-    said_empty = False
 
     while True:
-        if not queue.rows and screen == "list":
-            if not said_empty:
-                ytq.message(
-                    win,
-                    [
-                        "nothing in the queue",
-                        f"{sched._short(sched.ROOT)} holds nothing queued, "
-                        "failed or done",
-                        "ytq queues a video and dlq queues a file URL",
-                        # A bare `dlq` lands here now, and on an empty queue
-                        # this used to be the whole of it. What a bare `dlq`
-                        # printed before is one key away instead of gone: the
-                        # queue's own screen is what comes next.
-                        "next: what tonight would do, and the job",
-                    ],
-                )
-                said_empty = True
-            screen = "queue"
         cursor = max(0, min(cursor, max(0, len(queue.rows) - 1)))
-
-        if screen == "queue":
-            if gathered is None:
-                state, got = waiting(
-                    win,
-                    paint,
-                    " the queue ",
-                    "asking zwana what tonight has…",
-                    queue_facts,
-                )
-                if state != "ok":
-                    if not queue.rows:
-                        return queue.receipts
-                    flash = "" if state == "left" else f"could not read it: {got}"
-                    screen = "list"
-                    continue
-                gathered = got
-            mine_was = queue.mine()
-            key = queue_screen(win, paint, queue, gathered, flash)
-            flash = ""
-            if key == "q":
-                # Nothing to go back to on an empty queue: this screen was the
-                # answer to it, and q means leave.
-                if not queue.rows:
-                    return queue.receipts
-                screen, gathered = "list", None
-                continue
-            if key == "tick":
-                # A second's tick redraws what is downloading, from files on
-                # local disk. The status behind it is a reading, and re-reading
-                # the portal once a second is not watching, it is hammering —
-                # the reading says the time it was taken, which is what makes
-                # an old one legible rather than misleading.
-                queue.read()
-                if mine_was and not queue.mine():
-                    # Except here. A run of ours ending is the one moment the
-                    # figures behind this screen really do change, and it is
-                    # the moment someone is watching for.
-                    gathered = None
-                continue
-            act = QACTS.get(key)
-            if act is None:
-                continue
-            flash, changed = act(win, paint, queue, gathered)
-            if changed:
-                queue.receipts.append(flash)
-            queue.read()
-            # Anything that changed here changed what the status says.
-            gathered = None
-            continue
 
         if screen == "list":
             what, cursor = list_screen(win, paint, queue, cursor, flash, pick_up)
             flash, pick_up = "", ""
             if what == "quit":
                 return queue.receipts
-            screen = "queue" if what == "queue" else "item"
+            screen = "item"
             continue
 
         row = queue.rows[cursor]
@@ -2617,6 +2945,10 @@ def app(win) -> list[str]:
         flash, changed, focus = act(win, paint, queue, row)
         if changed:
             queue.receipts.append(flash)
+            # A removal, a requeue, a rename, a download started: each of them
+            # changes what tonight would download, and the line that says so is
+            # wrong until it has been asked again.
+            queue.tonight.start()
         queue.read()
         found = queue.index_of(focus) if focus else None
         if found is None:
@@ -2648,6 +2980,7 @@ def _self_test() -> int:
     once, and the figures are checked to be the thing that never gets clipped.
     """
     import contextlib
+    import itertools
     import json
     import tempfile
 
@@ -2704,19 +3037,16 @@ def _self_test() -> int:
         check(f"{name} picks the full hints at 80", hint(name, 80), HINTS[name])
 
     # The signpost on the screen a bare `dlq` opens. It is drawn where the
-    # hints are drawn, so it gets their budget; and the word it exists for is
-    # the one that must survive the narrow phone.
+    # hints are drawn, so it gets their budget; and the three keys it names are
+    # the whole of what the queue's own screen used to be.
     for width in (32, 40, 80):
-        legend = list_legend(width)
-        at_most(f"the list legend fits {width} columns", len(legend), width - 2)
-        check(f"and still names settings at {width}", "settings" in legend, True)
-        check(f"and leads with its key at {width}", legend[:2], "s ")
+        at_most(f"the legend row fits {width} columns", len(LEGEND_KEYS), width - 2)
+    for key in ("n ", "s ", "l "):
+        check(f"the legend names {key.strip()}", key in LEGEND_KEYS, True)
+    check("and nothing on it sends you to a screen that is gone",
+          "queue" in LEGEND_KEYS, False)
 
-    # -------------------------------------------------- the queue's own screen
-    # The screen a bare `dlq` reaches, and the only one that arms the job,
-    # runs the whole queue or moves where finished files go. Everything here
-    # guards one of two failures: a key that is offered and does nothing, and
-    # a figure agreed to that is not the figure spent.
+    # ------------------------------------------------------ the nightly job
     armed_job = [("job", f"{sched.ARMED}, fires every 15m", "32")]
     idle_job = [("job", "not armed - dlq arm", "1;31")]
     check("an armed job reads as armed", armed(armed_job), True)
@@ -2724,6 +3054,21 @@ def _self_test() -> int:
     # symptom is an arm key offering to arm what the line above says is armed.
     check("and 'not armed' does not", armed(idle_job), False)
     check("nor does a machine with no scheduler at all", armed([]), False)
+
+    # `dest_screen` zips its keys against the runner's kinds, which is what let
+    # `audio` be added by extending a tuple — and is also what would leave a
+    # kind with no key at all, silently, since a short zip does not raise. So
+    # the key map has to be at least as long as the list of kinds, and the hint
+    # has to name every key at both widths.
+    kinds = sched._runner().DEST_KINDS
+    check("every destination has a key to reach it", len(DEST_KEYS) >= len(kinds), True)
+    for letter, kind in zip(DEST_KEYS, kinds, strict=False):
+        for span in (80, 32):
+            check(
+                f"and the {kind} key is on the hints at {span}",
+                f"{chr(letter)} " in hint("dest", span),
+                True,
+            )
 
     sample = [
         {
@@ -2734,68 +3079,205 @@ def _self_test() -> int:
             "attempts": 0,
         }
     ]
-    for verdict in ("early", "go", "blind", "spent"):
-        for job, items in ((armed_job, sample), (idle_job, []), (armed_job, [])):
-            gathered = {
-                "facts": sched._fake_facts(verdict, items=items),
-                "job": job,
-            }
-            acts = queue_actions(gathered)
+
+    # ------------------------------------------------------- what tonight says
+    # The two header lines. Every verdict the gate can reach has to have words
+    # for it at every width, because this is the first thing anyone reads and a
+    # blank line where the answer goes is a screen that has given up.
+    for verdict, (headline, _hue) in sched.VERDICTS.items():
+        check(
+            f"the {verdict} verdict has a short spelling",
+            verdict in TONIGHT_SHORT,
+            True,
+        )
+        # The long spelling is the status screen's own headline, read out of
+        # VERDICTS rather than copied: two screens with two sets of words for
+        # one night is the failure this avoids by not having a second set.
+        at_most(
+            f"and the short one is shorter than {headline!r}",
+            len(TONIGHT_SHORT[verdict]),
+            len(headline),
+        )
+    for verdict in sched.VERDICTS:
+        if verdict == "downloading":
+            continue
+        facts = sched._fake_facts(verdict, items=sample)
+        for width in (32, 40, 80):
+            lines = tonight_lines(facts, width)
+            check(f"{verdict} at {width} is two lines", len(lines), 2)
+            for line in lines:
+                at_most(f"a {verdict} header line fits {width}", len(line), width - 2)
             check(
-                f"every key offered on {verdict} acts",
-                set(acts) <= set(QACTS),
+                f"and the {verdict} verdict line says something",
+                lines[0].startswith("tonight: "),
                 True,
             )
-            # The same rule one screen further in. `dest_screen` zips its keys
-            # against the runner's kinds, which is what let `audio` be added by
-            # extending a tuple — and is also what would leave a kind with no
-            # key at all, silently, since a short zip does not raise. So the
-            # key map has to be at least as long as the list of kinds, and the
-            # hint has to name every key at both widths.
-            kinds = sched._runner().DEST_KINDS
+    # Before the first reading has come back. Not a blank and not a zero: the
+    # screen opens on this, and a figure nobody has read is worse than a word.
+    for width in (32, 40, 80):
+        opening = tonight_lines(None, width)
+        check(f"with no reading yet it says it is asking at {width}",
+              opening, [_fit(ASKING, width - 2), ""])
+    # The download in flight outranks every verdict, exactly as it does on the
+    # status screen: what is being spent now is the answer to what is happening.
+    check(
+        "a download in flight is what the line says",
+        tonight_lines(sched._fake_facts("early", items=sample), 80, "40-alpha.py")[0],
+        "downloading now: alpha",
+    )
+    # Each of the four questions the figures line answers.
+    check(
+        "the figures name what may be spent and what expires",
+        tonight_lines(sched._fake_facts("early", items=sample), 80)[1].startswith(
+            f"{ytq.human(480 * 1024 * 1024)} to spend · "
+        ),
+        True,
+    )
+    check(
+        "and at 40 they are the two figures without the clock",
+        tonight_lines(sched._fake_facts("early", items=sample), 40)[1].endswith(
+            "expires"
+        ),
+        True,
+    )
+    check(
+        "the switch being off carries the way to turn it back on",
+        "settings auto on" in tonight_lines(sched._fake_facts("off"), 80)[1],
+        True,
+    )
+    blind_line = tonight_lines(sched._fake_facts("blind", items=sample), 80)[1]
+    check("a blind night says whose data it is", "mobile data" in blind_line, True)
+    check("and that nothing is counting it", "counting" in blind_line, True)
+    check(
+        "no reading at all is the portal's own complaint",
+        "credentials" in tonight_lines(sched._fake_facts("no-portal"), 80)[1],
+        True,
+    )
+
+    # ------------------------------------------------------------ the cut line
+    # Three items about the same size and a budget for two of them. The bytes
+    # are the runner's own arithmetic, so this pins the screen's use of it and
+    # not a second copy: what is checked is where the line falls.
+    trio = ["10-one.py", "20-two.py", "30-three.py"]
+    trio_rows = [{"name": name, "where": "queued"} for name in trio]
+    trio_facts = sched._fake_facts(
+        "go",
+        spendable=450 * 1024 * 1024,
+        bps=8 * 1024 * 1024,
+        items=[
+            {"name": name, "cap": 200 * 1024 * 1024, "desc": name, "attempts": 0}
+            for name in trio
+        ],
+    )
+    check("no reading is no line", cut_index(trio, None, 40), (None, ""))
+    check("and neither is an empty queue", cut_index([], trio_facts, 40), (None, ""))
+    cut, drawn = cut_index(trio, trio_facts, 40)
+    check("two of the three fit tonight", cut, 2)
+    # What it names is what tonight SPENDS, not what it is allowed to: the two
+    # are different numbers and only one of them is a promise.
+    check(
+        "and the line says how much that is",
+        ytq.human(2 * 200 * 1024 * 1024) in drawn,
+        True,
+    )
+    # THE ONE KEYPRESS. `three` is picked up and moved up once; it lands above
+    # `two`, and the line recomputes to fall between them. Nothing was renamed
+    # to do it and no cursor stopped on the line — it is worked out from the
+    # preview order and from nothing else.
+    lifted = [row["name"] for row in preview(trio_rows, "30-three.py", 1)]
+    check("one keypress puts three second", lifted, [trio[0], trio[2], trio[1]])
+    moved_cut, moved_line = cut_index(lifted, trio_facts, 40)
+    check("and the line falls between three and two", moved_cut, 2)
+    check("still naming the same night's spending", moved_line, drawn)
+    check(
+        "which is to say two is now the one below it",
+        lifted[moved_cut],
+        "20-two.py",
+    )
+    # The mirror of it: `two` pushed down once puts the same pair above the
+    # line, which is the same fact arrived at from the other end.
+    pushed = [row["name"] for row in preview(trio_rows, "20-two.py", 2)]
+    check("pushing two down once is the same order", pushed, lifted)
+    check("and the same line", cut_index(pushed, trio_facts, 40), (moved_cut, moved_line))
+    # The line's own width, at the three the rest of this file is checked at.
+    for width in (32, 40, 80):
+        for order in (trio, lifted):
+            _, text = cut_index(order, trio_facts, width)
+            at_most(f"the cut line fits {width}", len(text), width - 1)
+            check(f"and is drawn as a rule at {width}", text[:2], "──")
+    check(
+        "at 32 it is the short spelling",
+        cut_index(trio, trio_facts, 32)[1].startswith("── tonight: "),
+        True,
+    )
+
+    # Nothing tonight: the line goes to the top of the group and says why.
+    # A verdict that stops the night is quoted in the status screen's words;
+    # a night that would run and cannot afford anything gets the runner's own
+    # refusal, which is the sentence it would have logged.
+    for verdict in ("off", "late", "no-portal", "stale", "empty", "spent"):
+        stopped = sched._fake_facts(
+            verdict, items=trio_facts["items"], spendable=0, bps=8 * 1024 * 1024
+        )
+        where, text = cut_index(trio, stopped, 80)
+        check(f"a {verdict} night reaches nothing", where, 0)
+        check(
+            f"and the line names the {verdict} verdict",
+            sched.VERDICTS[verdict][0] in text,
+            True,
+        )
+    broke = sched._fake_facts(
+        "go", items=trio_facts["items"], spendable=1024, bps=8 * 1024 * 1024
+    )
+    where, text = cut_index(trio, broke, 80)
+    check("a night that can afford nothing reaches nothing", where, 0)
+    check(
+        "and says so in the runner's own words",
+        "spendable" in text,
+        True,
+    )
+
+    # ------------------------------------------- it can never promise too much
+    # The invariant the whole line rests on, checked the only way it is worth
+    # checking: over every order the screen could be put in. Reordering changes
+    # which items the budget reaches. It never changes the budget.
+    four = [
+        {"name": "10-part-small.py", "cap": 300 * 1024 * 1024, "partial": 1,
+         "slice_min": 32 * 1024 * 1024, "part_bytes": 100 * 1024 * 1024,
+         "desc": "", "attempts": 0},
+        {"name": "20-part-big.py", "cap": 4 * 1024 * 1024 * 1024, "partial": 1,
+         "slice_min": 32 * 1024 * 1024, "part_bytes": 0, "desc": "", "attempts": 0},
+        {"name": "30-whole.py", "cap": 150 * 1024 * 1024, "partial": 0,
+         "desc": "", "attempts": 0},
+        {"name": "40-too-big.py", "cap": 9 * 1024 * 1024 * 1024, "partial": 0,
+         "desc": "", "attempts": 0},
+    ]
+    budget = 400 * 1024 * 1024
+    for shape in ("go", "blind"):
+        spread_facts = sched._fake_facts(
+            shape, items=four, spendable=budget, bps=4 * 1024 * 1024
+        )
+        for order in itertools.permutations([item["name"] for item in four]):
+            names = list(order)
+            planned = tonight_plan(names, spread_facts)
+            spent = sum(entry["bytes"] for entry in planned)
+            at_most(
+                f"a {shape} night in {names} spends no more than the budget",
+                spent,
+                spread_facts["spendable"],
+            )
+            reaches, _ = cut_index(names, spread_facts, 40)
+            got = {entry["name"] for entry in planned if entry["bytes"]}
             check(
-                "every destination has a key to reach it",
-                len(DEST_KEYS) >= len(kinds),
+                f"and everything it reaches is above the line in {names}",
+                {name for name in names[: reaches or 0]} >= got,
                 True,
             )
-            # 80 and 32: the two the hint sets are keyed on just above, so a
-            # key present in one set and missing from the other is caught.
-            for letter, kind in zip(DEST_KEYS, kinds, strict=False):
-                for span in (80, 32):
-                    check(
-                        f"and the {kind} key is on the hints at {span}",
-                        f"{chr(letter)} " in hint("dest", span),
-                        True,
-                    )
             check(
-                f"and every act is offered on {verdict}",
-                set(QACTS) - set(acts),
+                f"with nothing below it getting anything in {names}",
+                {name for name in names[reaches or 0 :]} & got,
                 set(),
             )
-            for key, label in acts.items():
-                # The item screen's rule, one level up: the key, two spaces of
-                # gutter and the label, inside the narrowest phone there is.
-                at_most(
-                    f"the {key} label at {verdict} fits a phone",
-                    len(label) + 5,
-                    32 - 1,
-                )
-            # The body is the status screen and nothing else — a second layout
-            # of these figures is how two screens end up disagreeing about
-            # what tonight will spend. Its widths are checked where it is
-            # composed, in expire_sched's own suite.
-            for width in (32, 40, 80):
-                check(
-                    f"the {verdict} body at {width} is the status screen",
-                    queue_lines(gathered, width)
-                    == [
-                        plain
-                        for plain, _ in sched.compose_status(
-                            gathered["facts"], width, lambda text, tone="": text, job
-                        )
-                    ],
-                    True,
-                )
 
     # --------------------------------------------------------------- settings
     # The screen that changes what the queue may spend. Three failures worth
@@ -2847,7 +3329,7 @@ def _self_test() -> int:
                     check(
                         f"every setting has a block at {width} with {said}",
                         len(blocks),
-                        len(runner.SETTINGS),
+                        len(runner.SETTINGS) + len(PAGE_KEYS),
                     )
 
             store({})
@@ -2878,7 +3360,7 @@ def _self_test() -> int:
                 check(
                     f"and every one of them is named at {width}",
                     [tone for _, _, tone in shown].count("head"),
-                    len(runner.SETTINGS),
+                    len(runner.SETTINGS) + len(PAGE_KEYS),
                 )
                 check(
                     f"with its value beside it at {width}",
@@ -2887,7 +3369,7 @@ def _self_test() -> int:
                         for name, (_, text, _) in zip(
                             runner.SETTINGS,
                             [line for line in shown if line[2] == "head"],
-                            strict=True,
+                            strict=False,
                         )
                     ),
                     True,
@@ -2944,7 +3426,7 @@ def _self_test() -> int:
                 check(
                     f"every setting is still named on a 20-row phone at {width}",
                     [tone for _, _, tone in shown].count("head"),
-                    len(runner.SETTINGS),
+                    len(runner.SETTINGS) + len(PAGE_KEYS),
                 )
                 declined = "✗ config.json says 100"
                 check(
@@ -3013,24 +3495,67 @@ def _self_test() -> int:
                 True,
             )
 
-            # The switch is the one setting the queue screen itself has to
-            # admit to: a night that downloaded nothing is explained by it.
-            gathered = {
-                "facts": sched._fake_facts("go", items=sample),
-                "job": armed_job,
-            }
-            store({"auto": False})
-            off = queue_actions(gathered)["s"]
-            store({"auto": True})
-            on = queue_actions(gathered)["s"]
+            # The two rows that are not values in this file. Both are laid out
+            # like the six that are, both answer to a key on the same hint
+            # line, and neither may be the row that scrolls off a short phone —
+            # `j` is the one that says whether anything downloads at night at
+            # all, which is the question `auto` above it only half answers.
+            store({})
+            for width in (32, 40, 80):
+                for job in (armed_job, idle_job, None):
+                    drawn = settings_lines(width, job)
+                    for indent, text, _colour in drawn:
+                        at_most(
+                            f"a settings line with the two rows fits {width}",
+                            indent + len(text),
+                            width - 1,
+                        )
+                    heads = [text for _, text, tone in drawn if tone == "head"]
+                    check(
+                        f"the eight rows all have a block at {width}",
+                        len(heads),
+                        len(runner.SETTINGS) + len(PAGE_KEYS),
+                    )
+                    check(
+                        f"the destinations row is one of them at {width}",
+                        any(text.startswith("d  destinations") for text in heads),
+                        True,
+                    )
+                    check(
+                        f"and the nightly job is the last of them at {width}",
+                        heads[-1].startswith("j  nightly job"),
+                        True,
+                    )
+                    shown = settings_body(width, 20, job)
+                    at_most(
+                        f"and every one of them fits a 20-row phone at {width}",
+                        len(shown),
+                        20 - 6,
+                    )
+                    check(
+                        f"with none of them dropped at {width}",
+                        [tone for _, _, tone in shown].count("head"),
+                        len(runner.SETTINGS) + len(PAGE_KEYS),
+                    )
+            # The job row is `job_rows`' own words, not a second spelling of
+            # them: a page saying "not armed" over a status screen saying armed
+            # is two screens each right on their own.
             check(
-                "the s key says so when automatic downloads are off",
-                "OFF" in off,
+                "the job row says what the status screen says",
+                any(
+                    text.endswith(armed_job[0][1])
+                    for _, text, tone in settings_lines(80, armed_job)
+                    if tone == "head"
+                ),
                 True,
             )
-            check("and does not say it when they are on", "OFF" in on, False)
-            for label in (off, on):
-                at_most(f"the s label {label!r} fits a phone", len(label) + 5, 32 - 1)
+            for letter in PAGE_KEYS:
+                for span in (80, 32):
+                    check(
+                        f"and {chr(letter)} is on the settings hints at {span}",
+                        f"{chr(letter)} " in hint("settings", span),
+                        True,
+                    )
     finally:
         runner.CONFIG_FILE = was_config
 
@@ -3075,6 +3600,54 @@ def _self_test() -> int:
     state, why = waiting(None, {}, "", "", lambda: 1 / 0)
     check("and a failure is a reason, not a traceback", state, "failed")
     check("which names what went wrong", "ZeroDivisionError" in why, True)
+
+    # ------------------------------------------- the reading the screen waits
+    # The listing is redrawn on every keypress and the portal takes seconds, so
+    # the reading is done in a thread. Two things are pinned, and both are
+    # about what the main thread is allowed to see. **The thread never assigns
+    # the facts**: it fills a slot, and collect() — called from the draw loop
+    # and nowhere else — is the one line that moves a reading onto the screen,
+    # so a half-taken reading can never be drawn. And **a read that fails keeps
+    # the one before it** and leaves a line saying so, because an old reading
+    # with a word about it beats a screen that has gone blank.
+    was_reader = tonight_facts
+
+    def settled(holder: Tonight) -> None:
+        for _ in range(400):
+            if not holder.pending:
+                return
+            time.sleep(0.01)
+
+    try:
+        globals()["tonight_facts"] = lambda: {"verdict": "go", "reading": 1}
+        holder = Tonight()
+        check("nothing is on the screen before it has been asked", holder.facts, None)
+        holder.start()
+        settled(holder)
+        check("the thread does not assign what is drawn", holder.facts, None)
+        check("the main thread does, in collect", holder.collect(), True)
+        check("and what it took is what came back", holder.facts["reading"], 1)
+        check("a fresh reading is not asked for again", holder.pending, False)
+
+        def blow_up() -> dict:
+            raise OSError("no route to the portal")
+
+        globals()["tonight_facts"] = blow_up
+        holder.start()
+        settled(holder)
+        check("a failed read lands nothing", holder.collect(), False)
+        check("and keeps the reading before it", holder.facts["reading"], 1)
+        check("saying so in one line", "no route to the portal" in holder.note, True)
+        check("that goes where the verdict goes", holder.note.startswith("tonight: "),
+              True)
+        globals()["tonight_facts"] = lambda: {"verdict": "go", "reading": 2}
+        holder.start()
+        settled(holder)
+        holder.collect()
+        check("a reading that works takes the note away", holder.note, "")
+        check("and is the one on the screen", holder.facts["reading"], 2)
+    finally:
+        globals()["tonight_facts"] = was_reader
 
     # ------------------------------------------------------------- the order
     check("room between two items is used", slot([10, 30], 1), 20)
@@ -3684,6 +4257,30 @@ def _self_test() -> int:
                 list(range(len(rows))),
             )
             check(f"and only once at {width}", len(listed), len(set(listed)))
+            # The same, with a cut line through the queued group — and this is
+            # the pin that says the line is not an item: it is a heading, so no
+            # row's index moves because it is there and the cursor cannot stop
+            # on it. A line that took an index would silently shift every row
+            # below it by one, and the cursor would then act on its neighbour.
+            queued_at = [
+                index for index, row in enumerate(rows) if row["where"] == "queued"
+            ]
+            for where in range(len(queued_at) + 1):
+                ruled = compose_rows(rows, width, "", (where, "── tonight ──"))
+                for _, lines in ruled:
+                    for line in lines:
+                        at_most(f"a ruled row fits {width} columns", len(line), width - 1)
+                marked = [index for index, _ in ruled if index is not None]
+                check(
+                    f"every download is still on the screen at {width} cut {where}",
+                    marked,
+                    listed,
+                )
+                check(
+                    f"and the line took no index at {width} cut {where}",
+                    len(ruled) - len(drawn),
+                    1,
+                )
             for row in rows:
                 facts = item_lines(row, width)
                 for line in facts:
@@ -3803,7 +4400,7 @@ def _self_test() -> int:
             (set(ACTS) | SCREEN_KEYS) - every,
             set(),
         )
-        # What the queue screen's n key actually runs. Spawned rather than
+        # What the listing's n key actually runs. Spawned rather than
         # described: the failure this pins is the screen and the command line
         # drifting into two different runs — one of them without --force,
         # which downloads nothing and looks exactly like one that did.

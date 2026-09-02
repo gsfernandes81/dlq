@@ -7,8 +7,9 @@ the morning (100 MB, by default) and never touching the paid reserve.
 `docs/download-queue.md` is the user guide; `queue/README.md` is the item
 contract.
 
-One command: **`dlq`**. Bare on a terminal it opens the queue's screen; off
-one it prints status. `dlq <url>` queues a plain file URL (until
+One command: **`dlq`**. Bare on a terminal it opens the queue's screen, which
+shows what tonight would download and where it would stop; off one it prints
+status. `dlq <url>` queues a plain file URL (until
 2026-08-28 that was a command of its own). `dlq settings` shows and changes
 the window, the reserve and the paid data that waives it, whether automatic
 downloads run at all, and whether a blocked firing says so on the phone.
