@@ -16,12 +16,12 @@ import traceback.
 Decisions that travel with this code — each was arrived at the hard way:
 
 - **`dlq` typed on its own opens the screen** — `default_action`, whose other
-  half is the check to keep: with no terminal (a pipe, a script, ssh with no
-  tty) it is `status`, which is what a bare `dlq` always printed.
+  half is the half to keep pinned: with no terminal (a pipe, a script, ssh
+  with no tty) it is `status`, which is what a bare `dlq` always printed.
 - **`dlq <url>` queues a direct file download**, uniform with `ytq <url>`
   (2026-08-28; it was a separate `dlq` command, then briefly a verb). A URL
   is routed before the verbs — no verb contains `://` — and `dlq.py` keeps
-  its own module, flags and self-test; the dispatch in `expire_sched.main`
+  its own module and flags; the dispatch in `expire_sched.main`
   is only the door.
 - **The listing is the whole queue.** The old second-level queue screen is
   gone (2026-09-02) — `dlq`'s listing is the only screen there is, and its
@@ -56,7 +56,7 @@ Decisions that travel with this code — each was arrived at the hard way:
 - **`dlq status` leads with the verdict**, and the verdict is
   `expire_runner.gate()` — the same function the firing gates on, so a screen
   saying "waiting for the window" cannot be a night the runner stopped for
-  some other reason. The check to keep pins the *order* the gate answers in.
+  some other reason. A test must pin the *order* the gate answers in.
 - **`dlq ui` is the only thing in the queue that changes anything**, and an
   item is *four* things — the file in `queue/`, the partial in `work/<item>/`,
   anything finished in `out/<item>/`, and its record in `state.json`.
@@ -172,10 +172,10 @@ Decisions that travel with this code — each was arrived at the hard way:
   its own copy of the arithmetic; `plan()` is the one projection, walking a
   night of firings against `admit()` the same way `fire()` would. The sum
   `plan()` gives back is never more than the budget it was given, for *any*
-  ordering of the items — the self-test proves it by permutation rather than
+  ordering of the items — a test must prove it by permutation rather than
   trusting one order to stand for all of them. Reordering the queue moves the
-  line, never the budget: the pinned check is the user's own one-keypress
-  example, queue `one, two | three` becoming `one, three | two` after moving
+  line, never the budget: the example to pin is the user's own one-keypress
+  one, queue `one, two | three` becoming `one, three | two` after moving
   `three` up once — the line still falls after exactly as much as the budget
   allows, just between a different pair of names. The projection assumes
   every firing lands, which is the same bias the README already names for
@@ -195,13 +195,20 @@ Decisions that travel with this code — each was arrived at the hard way:
 ## Checks
 
 `make test` (pytest) = `make check` (`.githooks/checks.sh`, the one copy; the
-pre-push hook runs it). The self-tests are offline and need the sibling
-checkouts. **The checks worth not weakening** are commented in place:
-`expire_runner.py` § *Checking it* (the clock is pinned and the timezone swept
-either side of the date line — the vessel changes zone, never the clock;
-`expire_dl`'s first check is a file smaller than one chunk being *fetched*,
-not declined), and the `expire_ui` moves (done on a real temporary queue read
-through the real reader — the silent failures are bytes losing their item and
-a download missing from the screen it is removed from). The front ends check
-their own line widths down to 32 columns, so the suite fails on a long
-checkout path — that is the path, not a regression.
+pre-push hook runs it). Offline, and they need the sibling checkouts.
+
+**There are no tests right now.** Every module's `--self-test` was deleted
+outright on 2026-09-02 — the functions, the `--self-test` flags, the pytest
+shim over them and the completion entry — so that the whole thing can be
+rebuilt as a real pytest suite under `tests/`. Until that lands `checks.sh`
+reads pytest's exit 5 as "no tests yet" and passes, which is what keeps the
+interim commits pushable; the suite tightens it.
+
+What the suite has to cover, when it is written: the clock pinned and the
+timezone swept either side of the date line (the vessel changes zone, never
+the clock); `expire_dl` fetching a file smaller than one chunk rather than
+declining it; the `expire_ui` moves done on a real temporary queue read
+through the real reader (the silent failures are bytes losing their item and
+a download missing from the screen it is removed from); and both front ends'
+line widths down to 32 columns — which is why a long checkout path fails
+them, and that is the path, not a regression.

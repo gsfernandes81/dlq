@@ -35,12 +35,16 @@ beside its own repo, then under `~`. The phone keeps all three under `~`.
 ## Checks
 
 `make dev` (`uv sync`, once, networked) puts the locked pytest into `.venv`;
-then `make test` (`uv run pytest`) or `make check` — the same
-module self-tests either way;
-`.githooks/checks.sh` is the one copy of what runs, and the pre-push hook
+then `make test` or `make check` — both are `.githooks/checks.sh`, the one
+copy of what runs (pytest through `.venv` when there is one, plain `python3
+-m pytest` otherwise), and the pre-push hook
 (`git config core.hooksPath .githooks`, once per clone) refuses a push that
-fails them. They need the sibling checkouts present. They are offline: no
+fails it. The tests need the sibling checkouts present. They are offline: no
 network, no scheduler, no portal.
+
+The per-module `--self-test` checks were removed on 2026-09-02; the pytest
+suite that replaces them is being written. Until it lands `tests/` is empty
+and the gate says "no tests yet" rather than blocking a push.
 
 ## Migrating from or3 (one-time, on the phone)
 

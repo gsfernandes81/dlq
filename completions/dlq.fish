@@ -77,9 +77,9 @@ complete -c dlq -n "__dlq_after dest; and test (count (commandline -opc)) -ge 3"
 # `settings` takes a name and then a value. The names are spelled out here
 # rather than read from the runner: a completion may not import anything or
 # run a command that could, because this fires on every press of the tab key —
-# `dlq names` is the one exception and it only walks directories. The
-# self-test's own pin is on the other side of it: expire_sched checks that
-# every setting the runner has is one it can say a sentence about.
+# `dlq names` is the one exception and it only walks directories. The pin on
+# the other side of it belongs to a test: every setting the runner has must be
+# one expire_sched can say a sentence about.
 function __dlq_setting -d "the setting is one of these, and its value is next"
     set -l tokens (commandline -opc)
     test (count $tokens) -eq 3; or return 1
@@ -115,4 +115,3 @@ complete -c dlq -n "__dlq_setting notify-blocked" -a off \
 
 complete -c dlq -n "__dlq_after run-now" -l yes \
     -d "do not ask before spending data"
-complete -c dlq -n __dlq_bare -l self-test -d "offline checks; no scheduler, no network"
