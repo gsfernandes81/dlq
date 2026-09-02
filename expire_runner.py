@@ -73,7 +73,7 @@ Usage::
 
 Checking it
 -----------
-``python3 expire_runner.py --self-test`` runs 166 offline checks. It takes
+``python3 expire_runner.py --self-test`` runs 229 offline checks. It takes
 neither the lock nor the heartbeat, so it is safe to run while a firing is live.
 
 Two parts are worth not weakening. The **timezone sweep**: the checks pin the
@@ -89,6 +89,20 @@ The third is **:func:`gate`'s order**. It is the one decision two things read �
 the firing that acts on it and the status screen that reports it — and getting
 its order wrong leaves both plausible: the screen would say something true of
 most nights, just not the reason this one is quiet.
+
+The fourth is **what :func:`plan` may promise**. The queue screen draws a line
+through the queue at the point tonight's spending runs out, and the person
+moving items about is reading it as a promise; :func:`admit` is the one rule
+both it and :func:`fire` ask, and the check is that *no ordering of the queue
+plans more than the budget* — pinned over every permutation of a queue holding
+each kind of item, and again over a couple of hundred nights drawn from a
+seeded generator. A screen that can commit more than the runner will spend is
+the one failure the line must not have. The firing's own end of that is pinned
+too: with :func:`admit` refusing, a real :func:`fire` on a queue of its own
+must download nothing, say why, and have asked at the rate the projection
+plans at — :func:`working_rate` of what was measured, made in one place
+because two ends halving the throughput differently would draw the line for a
+night nobody is going to work.
 
 ``ytdl_item.py --self-test`` (29 checks) covers the byte metering, which is what
 decides when a slice stops. ``ytq``, ``dlq`` and ``dlq`` have their own
@@ -182,6 +196,14 @@ STOP_MARGIN = 90
 #: A single JobScheduler firing gets ~10 minutes before the platform stops it.
 #: Budget nine, so an item is asked to stop rather than being cut off mid-write.
 FIRING_SECONDS = 9 * 60
+
+#: How often JobScheduler comes round, in seconds — its own periodic floor, and
+#: what ``dlq arm`` asks for. A night is therefore not one long run but a row of
+#: :data:`FIRING_SECONDS` slices, one per period, and the projection on the
+#: screen has to work the night the same way or it would promise a whole
+#: evening's throughput to a queue that will only ever be given nine minutes
+#: at a time.
+JOB_PERIOD = 900
 
 #: The stop time of a run that has none. Every deadline in this file exists to
 #: land the spending inside an allowance that is wiped at 00:00 UTC, or to hand
@@ -1045,6 +1067,263 @@ def queued_items() -> tuple[list[dict], list[dict]]:
 
 
 # --------------------------------------------------------------------------- #
+# What an item may take
+# --------------------------------------------------------------------------- #
+
+#: The one refusal that ends a firing rather than skipping an item: with under
+#: three quarters of a minute left there is no time for anything behind it
+#: either, so :func:`fire` stops the pass instead of walking the rest of the
+#: queue. Spelled once, here, and recognised by :func:`fire` by its words —
+#: the alternative is fire() keeping a second copy of the 45-second rule, and
+#: the two answering differently on the night they disagree.
+NO_TIME = "out of time for this firing"
+
+
+def working_rate(ewma: float) -> float:
+    """The throughput a slice is sized against: half what was measured.
+
+    :data:`ewma_bps` is an average over the slices that have run, and the
+    slices that ran are the ones that went well. What it is used for is the
+    opposite question — will this item still be finished when the firing ends
+    — and getting that wrong costs the whole item: for a whole download the
+    bytes are spent and nothing is struck off the queue, and a slice sized to
+    a night faster than tonight is one the item cannot deliver. Half is the
+    margin for a link slower than its own average, and the floor under it is
+    there so an interface that has been idle all month cannot project a night
+    at a rate no link ever runs at.
+
+    One function because :func:`fire` and :func:`plan` both ask it. The
+    measured figure is what travels between them — ``snapshot()["bps"]`` is
+    the EWMA itself — so a screen that halved it once more, or not at all,
+    would be drawing its line for a night at a different speed from the one
+    the runner is going to work.
+    """
+    return max(0.5 * ewma, 100 * 1024)
+
+
+def admit(
+    item: dict,
+    record: dict,
+    budget: int,
+    rate: float,
+    remaining_time: float,
+    flying: bool,
+    free_disk: int | None = None,
+) -> tuple[int, str]:
+    """(bytes this item may take in this firing, or 0 and why not).
+
+    The per-item decision, lifted out of :func:`fire`'s loop so that a screen
+    can project the night the runner would actually work. **It is one function
+    at both ends** for the same reason the arm and cancel verbs are: a cut line
+    drawn from a second copy of these rules would promise bytes the runner then
+    refuses, and the queue would be committing more than the night will spend —
+    which is the one thing the line exists to prevent.
+
+    Pure. Every figure it decides on is handed to it, and the log lines stay
+    in :func:`fire`, whose wording for a refusal *is* the text returned here.
+
+    *record* is the item's row in ``state.json`` — only ``part_bytes`` is read
+    from it. *rate* is the working rate, :func:`working_rate` of what was
+    measured, because both callers have already made that conversion.
+    *flying* is a blind run, where the budget is the items' own
+    payload declarations and so must not be derated for wire overhead a second
+    time. *free_disk* is optional because a projection has one reading for the
+    whole night while a firing takes a fresh one per item: ``None`` means the
+    disk was not asked about, which is not a reason to refuse an item.
+    """
+    if remaining_time < 45:
+        return 0, NO_TIME
+    if free_disk is not None and free_disk < item["cap"] + DISK_SPARE:
+        return 0, f"only {human(free_disk)} disk free"
+
+    slice_min = item.get("slice_min")
+    if slice_min is None:
+        slice_min = SLICE_MIN_BYTES
+
+    if item.get("partial"):
+        # A partial item is never refused for being too big; it is given a
+        # slice and asked to come back. The slice is derated for wire overhead
+        # so the item's own stop lands short of the runner's kill.
+        done_already = int(record.get("part_bytes") or 0)
+        need = max(0, item["cap"] - done_already)
+        if need == 0:
+            # Nothing to give it, and no rule below says so: with need at zero
+            # the useful minimum is zero too, so the arithmetic would hand back
+            # a slice of nothing with no reason attached to it.
+            return 0, "nothing left to fetch"
+        # The wire derate belongs to a budget that is measured on the wire —
+        # the portal's remainder, the interface counters. A blind budget is the
+        # items' own payload declarations added up, so derating it here would
+        # charge the overhead twice: every partial item would be handed a slice
+        # ~7% short of the size it declared and need another run to collect a
+        # tail that was never really missing.
+        by_budget = budget if flying else int(budget / WIRE_FACTOR)
+        # What the clock allows is one of the limits, and only where there is a
+        # clock: with no deadline the item is given the whole of what it still
+        # needs and takes as long as that takes.
+        limits = [need, by_budget]
+        if remaining_time != NO_DEADLINE:
+            limits.append(int(rate * max(0, remaining_time - 45)))
+        cap = max(0, min(limits))
+
+        # The minimum exists to stop nightly churn, but must not block a file
+        # that is nearly finished.
+        floor_slice = min(slice_min, need)
+        if cap < floor_slice:
+            left = (
+                "no deadline"
+                if remaining_time == NO_DEADLINE
+                else f"{remaining_time:.0f}s left"
+            )
+            return 0, (
+                f"slice {human(cap)} below the useful minimum "
+                f"{human(floor_slice)} (budget {human(budget)}, {left})"
+            )
+        if cap == 0:
+            # Only reachable for an item that declared no minimum at all: a
+            # floor of nothing cannot catch a slice of nothing, and the answer
+            # must still be a refusal with words on it. Spawning an item to
+            # fetch zero bytes spends a firing to strike nothing off the queue.
+            return 0, f"nothing left to spend on a slice ({human(budget)} left)"
+        return cap, ""
+
+    cap = item["cap"]
+    if cap > budget:
+        return 0, f"needs {human(cap)}, {human(budget)} spendable"
+    predicted = cap / rate
+    if predicted > remaining_time - 30:
+        return 0, f"needs ~{predicted:.0f}s, {remaining_time:.0f}s left this firing"
+    return cap, ""
+
+
+def plan(
+    items: list[dict],
+    state: dict,
+    budget: int,
+    rate: float,
+    seconds: float,
+    flying: bool,
+    free_disk: int | None = None,
+) -> list[dict]:
+    """Tonight's projection: ``[{"name", "bytes", "reason"}]`` in *items* order.
+
+    The night as :func:`fire` would work it, in the order the items are given:
+    firings of :data:`FIRING_SECONDS` apiece, one per :data:`JOB_PERIOD`, until
+    *seconds* of night is used up; within a firing the queue in order, each item
+    through :func:`admit` with the time this firing has left, the budget reduced
+    by what was admitted and the clock by how long those bytes take at *rate*. A
+    whole item, once admitted, is finished and is not offered again; a partial
+    one's progress advances by what it got and it comes back for more in the
+    next firing. A pass that admits nothing ends the night — nothing later will
+    change the answer, since neither the budget nor the queue grows.
+
+    A *seconds* of :data:`NO_DEADLINE` is the blind night: one pass, no clock,
+    exactly as ``run-now --blind`` works the queue until the queue is done.
+
+    *rate* is the throughput as measured — ``snapshot()["bps"]``, straight
+    across — and :func:`working_rate` turns it into the one the night is
+    worked at, here as in :func:`fire`.
+
+    Pure — no clock, no disk, no config, no portal, and *state* is read and
+    never written. The caller hands over every figure, which is what lets the
+    screen ask "and if they were in this order instead?" of an ordering that
+    exists nowhere but on the screen. What comes back is one entry per item in
+    the order given: the bytes it would get across the whole night, and, for an
+    item that gets none, the last reason it was turned down.
+
+    The budget is the one thing an ordering cannot change: every item is
+    admitted out of what is left, so the total is at most *budget* whichever
+    way round the queue is put.
+    """
+    # The measured figure in, the working one out — the same conversion fire()
+    # makes, and made here so that a front end hands over what it has rather
+    # than a figure it had to know to halve.
+    rate = working_rate(rate)
+    # ``state.json``'s items are a mapping keyed by name; a snapshot's are a
+    # list of the same items, and the two are easy to hand over the wrong way
+    # round. A screen drawing a line must not traceback over that — the items
+    # carry their own progress anyway, which is the half that matters here.
+    records = (state or {}).get("items", {})
+    if not isinstance(records, dict):
+        records = {}
+
+    # The simulation's own copy of what each item has already: a partial item's
+    # progress moves across the night's firings, and state.json must not. Taken
+    # from the item when it carries the figure — a snapshot's items do — and
+    # from the state row otherwise, so either half of what snapshot() hands out
+    # is enough to plan from.
+    part: dict[str, int] = {}
+    for item in items:
+        stored = records.get(item["name"], {}).get("part_bytes")
+        part[item["name"]] = int(item.get("part_bytes", stored) or 0)
+    taken = {item["name"]: 0 for item in items}
+    reasons = {item["name"]: "" for item in items}
+    finished: set[str] = set()
+
+    left = int(budget)
+    elapsed = 0.0
+    endless = seconds == NO_DEADLINE
+    while True:
+        if endless:
+            remaining = NO_DEADLINE
+        else:
+            if elapsed >= seconds:
+                break
+            # The last firing of the night is cut short by the night, exactly
+            # as fire() cuts it: firing_stop is the earlier of the stop time
+            # and nine minutes from now.
+            remaining = min(float(FIRING_SECONDS), seconds - elapsed)
+
+        admitted = 0
+        for position, item in enumerate(items):
+            name = item["name"]
+            if name in finished:
+                continue
+            got, why = admit(
+                item,
+                {"part_bytes": part[name]},
+                left,
+                rate,
+                remaining,
+                flying,
+                free_disk,
+            )
+            if not got:
+                if why == NO_TIME:
+                    # This firing is over for everything, not just for this
+                    # item — the same break fire() takes. Everything behind it
+                    # is out of time for the same reason, and on the last
+                    # firing of the night nothing else will ever say so.
+                    for behind in items[position:]:
+                        if not taken[behind["name"]]:
+                            reasons[behind["name"]] = why
+                    break
+                reasons[name] = why
+                continue
+            admitted += got
+            taken[name] += got
+            left = max(0, left - got)
+            part[name] += got
+            if not item.get("partial"):
+                finished.add(name)
+            if not endless:
+                remaining -= got / rate
+
+        if not admitted or endless:
+            break
+        elapsed += JOB_PERIOD
+
+    return [
+        {
+            "name": item["name"],
+            "bytes": taken[item["name"]],
+            "reason": "" if taken[item["name"]] else reasons[item["name"]],
+        }
+        for item in items
+    ]
+
+
+# --------------------------------------------------------------------------- #
 # Running one item
 # --------------------------------------------------------------------------- #
 
@@ -1580,8 +1859,12 @@ def snapshot(force: bool = False, blind: bool = False) -> dict:
     which belongs to the widget rather than to the queue.
 
     Facts only: what the gate decided, the figures it decided on, and the items
-    as declared. How any of it is drawn is :func:`expire_sched.compose_status`,
-    which lays out the same terminal ``dlq list`` does.
+    as declared — including the two a projection needs, the working time the
+    night has left and the free disk, so that a front end can ask :func:`plan`
+    what tonight would download without reading the clock a second time and
+    getting a different night. How any of it is drawn is
+    :func:`expire_sched.compose_status`, which lays out the same terminal
+    ``dlq list`` does.
     """
     state = load_state()
     items, rejected = queued_items()
@@ -1594,6 +1877,20 @@ def snapshot(force: bool = False, blind: bool = False) -> dict:
     verdict, detail = gate(
         items, doc, window_open, stop_by, current, force, blind, auto_enabled()
     )
+
+    # The working time tonight's projection has. A firing that is going to
+    # spend starts now (or when the window opens, if it has not yet) and stops
+    # at the stop time; every other verdict is a night that downloads nothing,
+    # and saying "no time" is how a projection says so without having to know
+    # what any of the verdicts mean. A blind run has no stop time at all —
+    # nothing may cut it short for the clock — which is the same NO_DEADLINE
+    # the runner works to.
+    if verdict == "blind":
+        night_seconds: float = NO_DEADLINE
+    elif verdict in ("go", "early", "spent"):
+        night_seconds = max(0.0, stop_by - max(current, window_open))
+    else:
+        night_seconds = 0.0
 
     records = state.get("items", {})
     return {
@@ -1625,11 +1922,26 @@ def snapshot(force: bool = False, blind: bool = False) -> dict:
         "settings": settings(),
         "bps": state.get("ewma_bps", BOOTSTRAP_BPS),
         "max_attempts": MAX_ATTEMPTS,
+        # The two figures a projection needs and nothing else here wanted: how
+        # much working time tonight has left, and how much disk there is to put
+        # it on. Both are gathered where the verdict is, so that what a screen
+        # plans and what the gate decided are the same night — a screen that
+        # asked the clock again a second later could draw a line for a window
+        # that has closed since.
+        "night_seconds": night_seconds,
+        "free_disk": shutil.disk_usage(str(ROOT)).free,
         "items": [
             {
                 "name": item["name"],
                 "cap": item["cap"],
                 "partial": item["partial"],
+                # Carried so a front end can hand the items straight back to
+                # plan() in any order it likes, without a second reading of
+                # state.json to find what each one already has.
+                "slice_min": item["slice_min"],
+                "part_bytes": int(
+                    records.get(item["name"], {}).get("part_bytes") or 0
+                ),
                 "desc": item["desc"],
                 "attempts": int(records.get(item["name"], {}).get("attempts") or 0),
             }
@@ -1722,73 +2034,42 @@ def fire(force: bool = False, blind: bool = False) -> int:
 
     for item in items:
         remaining_time = firing_stop - now()
-        if remaining_time < 45:
-            log("out of time for this firing; the rest waits for the next")
-            break
-
         free_disk = shutil.disk_usage(str(ROOT)).free
-        if free_disk < item["cap"] + DISK_SPARE:
-            log(f"skip {item['name']}: only {human(free_disk)} disk free")
+        rate = working_rate(state.get("ewma_bps", BOOTSTRAP_BPS))
+
+        # The decision itself is admit(), which is also what the screen draws
+        # its cut line from — so a line saying an item gets bytes tonight is
+        # the same answer this loop is about to give it. What stays here is
+        # the wording: a refusal is logged as this loop has always logged it,
+        # with the reason admit() hands back.
+        cap, refusal = admit(
+            item,
+            state.get("items", {}).get(item["name"], {}),
+            budget,
+            rate,
+            remaining_time,
+            flying,
+            free_disk,
+        )
+        if not cap:
+            if refusal == NO_TIME:
+                # Not this item's refusal but the firing's: there is no time
+                # left for anything behind it either.
+                log(f"{refusal}; the rest waits for the next")
+                break
+            log(f"skip {item['name']}: {refusal}")
             continue
 
+        # Only now, so that an item that was never offered a byte does not
+        # collect a row in state.json for having been walked past.
         record = state.setdefault("items", {}).setdefault(item["name"], {"attempts": 0})
-        rate = max(0.5 * state.get("ewma_bps", BOOTSTRAP_BPS), 100 * 1024)
-
         if item["partial"]:
-            # A partial item is never refused for being too big; it is given a
-            # slice and asked to come back. The slice is derated for wire
-            # overhead so the item's own stop lands short of the runner's kill.
             done_already = int(record.get("part_bytes") or 0)
-            need = max(0, item["cap"] - done_already)
-            # The wire derate belongs to a budget that is measured on the wire
-            # — the portal's remainder, the interface counters. A blind budget
-            # is the items' own payload declarations added up, so derating it
-            # here would charge the overhead twice: every partial item would be
-            # handed a slice ~7% short of the size it declared and need another
-            # run to collect a tail that was never really missing.
-            by_budget = budget if flying else int(budget / WIRE_FACTOR)
-            # What the clock allows is one of the limits, and only where there
-            # is a clock: with no deadline the item is given the whole of what
-            # it still needs and takes as long as that takes.
-            limits = [need, by_budget]
-            if remaining_time != NO_DEADLINE:
-                limits.append(int(rate * max(0, remaining_time - 45)))
-            cap = max(0, min(limits))
-
-            # The minimum exists to stop nightly churn, but must not block a
-            # file that is nearly finished.
-            floor_slice = min(item["slice_min"], need)
-            if cap < floor_slice:
-                left = (
-                    "no deadline"
-                    if remaining_time == NO_DEADLINE
-                    else f"{remaining_time:.0f}s left"
-                )
-                log(
-                    f"skip {item['name']}: slice {human(cap)} below the useful "
-                    f"minimum {human(floor_slice)} "
-                    f"(budget {human(budget)}, {left})"
-                )
-                continue
             log(
-                f"{item['name']}: slice {human(cap)} of {human(need)} still "
+                f"{item['name']}: slice {human(cap)} of "
+                f"{human(max(0, item['cap'] - done_already))} still "
                 f"needed ({human(done_already)} done)"
             )
-        else:
-            cap = item["cap"]
-            if cap > budget:
-                log(
-                    f"skip {item['name']}: needs {human(cap)}, "
-                    f"{human(budget)} spendable"
-                )
-                continue
-            predicted = cap / rate
-            if predicted > remaining_time - 30:
-                log(
-                    f"skip {item['name']}: needs ~{predicted:.0f}s, "
-                    f"{remaining_time:.0f}s left this firing"
-                )
-                continue
 
         item_stop = min(firing_stop, stop_by)
         began = now()
@@ -1946,6 +2227,8 @@ def _checks() -> int:
     plausible window, just displaced by hours, and the only symptom would be
     downloads starting at the wrong time months later.
     """
+    import itertools
+    import random
     import tempfile
 
     passed = failed = 0
@@ -2487,6 +2770,540 @@ def _checks() -> int:
         100 * MiB,
     )
     check("an empty queue costs nothing", blind_budget([], {}), 0)
+
+    # What an item may take. One function, asked by the firing that spends and
+    # by the screen that says where tonight stops — so each rule gets an input
+    # that turns on it alone, and the two wordings the log has always used are
+    # pinned as words, because that log line is the only record of a night that
+    # downloaded nothing.
+    def _item(
+        name: str,
+        cap: int,
+        partial: bool = False,
+        slice_min: int = 32 * MiB,
+        part_bytes: int = 0,
+    ) -> dict:
+        return {
+            "name": name,
+            "cap": cap,
+            "partial": partial,
+            "slice_min": slice_min,
+            "part_bytes": part_bytes,
+        }
+
+    whole = _item("40-whole.py", 100 * MiB)
+    piece = _item("41-part.py", 1000 * MiB, partial=True)
+    fast = 4.0 * MiB  # bytes a second, and a round number on purpose
+    night = 8 * 3600.0
+    plenty = 500 * MiB
+
+    check("an item that fits is admitted whole", admit(whole, {}, plenty, fast, night, False), (100 * MiB, ""))
+    check(
+        "under 45 seconds nothing is admitted at all",
+        [
+            admit(thing, {}, plenty, fast, 44.0, False)
+            for thing in (whole, piece)
+        ],
+        [(0, NO_TIME), (0, NO_TIME)],
+    )
+    # The refusal fire() breaks the pass on rather than skipping past, which is
+    # why it is a constant and not a sentence written twice.
+    check("and that refusal is the one that ends the firing", NO_TIME, "out of time for this firing")
+    check(
+        "an item is refused the disk it would need",
+        admit(whole, {}, plenty, fast, night, False, whole["cap"] + DISK_SPARE - 1),
+        (0, f"only {human(whole['cap'] + DISK_SPARE - 1)} disk free"),
+    )
+    check(
+        "the spare is part of what it needs",
+        admit(whole, {}, plenty, fast, night, False, whole["cap"] + DISK_SPARE)[0],
+        100 * MiB,
+    )
+    # A projection has one disk reading for the whole night where a firing
+    # takes a fresh one per item, so "nobody asked" must not read as "no room".
+    check(
+        "and a disk nobody asked about refuses nothing",
+        admit(whole, {}, plenty, fast, night, False, None)[0],
+        100 * MiB,
+    )
+    check(
+        "a whole item bigger than the budget is stepped over",
+        admit(whole, {}, 50 * MiB, fast, night, False),
+        (0, "needs 100 MiB, 50 MiB spendable"),
+    )
+    check(
+        "so is one that cannot be finished in the time left",
+        admit(whole, {}, plenty, fast, 50.0, False),
+        (0, "needs ~25s, 50s left this firing"),
+    )
+    # The three limits on a slice, each made to be the smallest in turn.
+    check(
+        "a slice is never more than is still needed",
+        admit(piece, {"part_bytes": 900 * MiB}, plenty, fast, night, False)[0],
+        100 * MiB,
+    )
+    check(
+        "nor more than the budget, derated for the wire",
+        admit(piece, {}, 100 * MiB, fast, night, False)[0],
+        int(100 * MiB / WIRE_FACTOR),
+    )
+    check(
+        "nor more than the clock allows",
+        admit(
+            _item("42-long.py", 10_000 * MiB, partial=True),
+            {},
+            100_000 * MiB,
+            fast,
+            300.0,
+            False,
+        )[0],
+        int(fast * (300 - 45)),
+    )
+    # A blind budget is the items' own payload declarations added up, so
+    # derating it here would charge the wire overhead twice.
+    check(
+        "and a blind budget is not derated a second time",
+        admit(piece, {}, 100 * MiB, fast, night, True)[0],
+        100 * MiB,
+    )
+    refused = admit(piece, {}, 20 * MiB, fast, night, False)
+    check("a slice below the useful minimum is not taken", refused[0], 0)
+    check("and says which minimum", refused[1].startswith("slice "), True)
+    # The minimum exists to stop nightly churn, not to strand a nearly
+    # finished file that will never again ask for that much.
+    check(
+        "a tail under the minimum is still admitted",
+        admit(piece, {"part_bytes": 1000 * MiB - MiB}, plenty, fast, night, False)[0],
+        MiB,
+    )
+    check(
+        "an item with nothing left to fetch is told so",
+        admit(piece, {"part_bytes": 1000 * MiB}, plenty, fast, night, False),
+        (0, "nothing left to fetch"),
+    )
+    # No deadline is not a very long one: nothing may cut a blind download
+    # short for the time, so the clock is not one of the limits at all.
+    check(
+        "with no deadline the clock limits nothing",
+        admit(piece, {}, 10_000 * MiB, fast, NO_DEADLINE, True)[0],
+        1000 * MiB,
+    )
+    check(
+        "and a refusal under one says so rather than printing an infinity",
+        "no deadline" in admit(piece, {}, 20 * MiB, fast, NO_DEADLINE, False)[1],
+        True,
+    )
+
+    # Tonight's projection: the same rule run forward over the night's firings.
+    # The property that matters is about money rather than about order — the
+    # queue screen lets the items be shuffled, and **no arrangement of them may
+    # plan more than the budget**, or the line would be committing bytes the
+    # runner then refuses. Checked over every permutation of a queue holding
+    # each kind of item, one of them too big for the night altogether.
+    four = [
+        _item("40-part-small.py", 200 * MiB, partial=True),
+        _item("41-part-big.py", 900 * MiB, partial=True, part_bytes=100 * MiB),
+        _item("42-whole.py", 150 * MiB),
+        _item("43-huge.py", 900 * MiB),
+    ]
+    overspent: list[tuple] = []
+    impossible: list[tuple] = []
+    halved: list[tuple] = []
+    unexplained: list[tuple] = []
+    passed_over: list[tuple] = []
+    reordered: list[tuple] = []
+    for order in itertools.permutations(four):
+        rows = plan(list(order), {}, plenty, fast, night, False)
+        got = {row["name"]: row["bytes"] for row in rows}
+        names = tuple(item["name"] for item in order)
+        if sum(got.values()) > plenty:
+            overspent.append(names)
+        if tuple(row["name"] for row in rows) != names:
+            reordered.append(names)
+        for row in rows:
+            # A refusal for every item that got nothing, and none for an item
+            # that got something: the line has to be able to say why.
+            if bool(row["bytes"]) == bool(row["reason"]):
+                unexplained.append((names, row["name"]))
+        for item in order:
+            mine = got[item["name"]]
+            if not 0 <= mine <= item["cap"] - item["part_bytes"]:
+                impossible.append((names, item["name"]))
+            # A whole item is all or nothing; only a partial one takes a slice.
+            if not item["partial"] and mine not in (0, item["cap"]):
+                halved.append((names, item["name"]))
+        # Nothing is left on the table: a whole item that got nothing is one
+        # the leftover budget could not have paid for either.
+        leftover = plenty - sum(got.values())
+        for item in order:
+            if not item["partial"] and not got[item["name"]] and item["cap"] <= leftover:
+                passed_over.append((names, item["name"]))
+    # Only the first offender of each is shown: 24 orderings failing the same
+    # way is 24 copies of one bug, and the first is the one to reproduce.
+    check("no ordering plans more than the budget", overspent[:1], [])
+    check("the plan comes back in the order it was given", reordered[:1], [])
+    check("nothing is planned that the item does not need", impossible[:1], [])
+    check("a whole item is all of it or none of it", halved[:1], [])
+    check("every item that gets nothing says why", unexplained[:1], [])
+    check("and nothing that would have fitted is passed over", passed_over[:1], [])
+
+    # The user's own example, which is the one keypress the line exists for:
+    # three items of a size, a budget for two. Moving the third up once must
+    # move the line, and only the line.
+    trio = [_item(name, 200 * MiB) for name in ("one", "two", "three")]
+    first, second, third = trio
+    check(
+        "as it stands, the first two fit",
+        [(row["name"], row["bytes"] > 0) for row in plan(trio, {}, plenty, fast, night, False)],
+        [("one", True), ("two", True), ("three", False)],
+    )
+    check(
+        "and one keypress moves the line, never the budget",
+        [
+            (row["name"], row["bytes"] > 0)
+            for row in plan([first, third, second], {}, plenty, fast, night, False)
+        ],
+        [("one", True), ("three", True), ("two", False)],
+    )
+
+    # A whole item that does not fit is stepped over and the queue behind it
+    # goes on — the same continue fire() takes. A partial one in front is
+    # different on purpose: it is handed a slice, and the slice is the budget.
+    check(
+        "an item too big for tonight does not starve what is behind it",
+        [row["bytes"] for row in plan(
+            [_item("40-huge.py", 900 * MiB), _item("41-small.py", 100 * MiB)],
+            {}, plenty, fast, night, False,
+        )],
+        [0, 100 * MiB],
+    )
+    check(
+        "a partial item in front of the queue takes the night with it",
+        [row["bytes"] > 0 for row in plan(
+            [_item("40-part.py", 9000 * MiB, partial=True), _item("41-small.py", 100 * MiB)],
+            {}, plenty, fast, night, False,
+        )],
+        [True, False],
+    )
+
+    # The two bounds, one at a time. A budget that would take days plans only
+    # the budget; a window of one firing plans only what one firing can carry.
+    forever = _item("40-part.py", 9000 * MiB, partial=True, slice_min=MiB)
+    check(
+        "a small budget under a long night plans the budget",
+        sum(row["bytes"] for row in plan([forever], {}, 10 * MiB, fast, night, False)),
+        int(10 * MiB / WIRE_FACTOR),
+    )
+    check(
+        "a large budget in one firing plans what the firing can carry",
+        plan([forever], {}, 100_000 * MiB, fast, float(JOB_PERIOD), False)[0]["bytes"],
+        int(working_rate(fast) * (FIRING_SECONDS - 45)),
+    )
+    # A rate nobody has measured yet, or an idle month's worth of one, would
+    # otherwise project a night at a speed no link ever runs at.
+    check(
+        "a rate below the floor is planned at the floor",
+        plan([forever], {}, 100_000 * MiB, 1.0, float(JOB_PERIOD), False)[0]["bytes"],
+        int(100 * 1024 * (FIRING_SECONDS - 45)),
+    )
+    # And the halving itself, which is the half of the conversion a front end
+    # could not know to make: handed twice the floor it plans at the floor,
+    # because what it was handed is what was *measured* and the night is
+    # worked at half of it.
+    check(
+        "a measured rate is planned at the working one",
+        plan([forever], {}, 100_000 * MiB, 2 * 100 * 1024.0, float(JOB_PERIOD), False)[
+            0
+        ]["bytes"],
+        int(100 * 1024 * (FIRING_SECONDS - 45)),
+    )
+    check(
+        "which is half of it, with a floor under it",
+        (working_rate(8 * MiB), working_rate(1.0), working_rate(BOOTSTRAP_BPS)),
+        (4.0 * MiB, 100 * 1024, 0.5 * BOOTSTRAP_BPS),
+    )
+    # The blind night: no clock, so one pass and the whole declared budget.
+    check(
+        "with no deadline the whole budget is planned in one pass",
+        plan([forever], {}, plenty, fast, NO_DEADLINE, True)[0]["bytes"],
+        plenty,
+    )
+    check(
+        "a night with no time in it plans nothing",
+        [row["bytes"] for row in plan(four, {}, plenty, fast, 0.0, False)],
+        [0, 0, 0, 0],
+    )
+    # And names nobody, because there is no firing in which any of them was
+    # turned down: what a screen says about a night of no length is the
+    # verdict that made it one, not a per-item refusal.
+    check(
+        "and holds nothing against any of them",
+        [row["reason"] for row in plan(four, {}, plenty, fast, 0.0, False)],
+        ["", "", "", ""],
+    )
+    # A night down to its last seconds is a firing that starts and admits
+    # nothing, which is a different thing and does say so — for every item,
+    # not only the one that happened to be asked first.
+    check(
+        "a night down to its last seconds tells every item why",
+        [row["reason"] for row in plan(four, {}, plenty, fast, 40.0, False)],
+        [NO_TIME] * 4,
+    )
+    # An item that declares no minimum at all cannot be caught by the floor,
+    # and a slice of nothing must still come back with words on it: a row
+    # holding neither bytes nor a reason is a line the screen cannot draw.
+    check(
+        "a slice of nothing is refused in words",
+        plan([_item("40-nofloor.py", 100 * MiB, partial=True, slice_min=0)],
+             {}, 0, fast, night, False)[0]["reason"],
+        "nothing left to spend on a slice (0 B left)",
+    )
+    check("an empty queue plans nothing", plan([], {}, plenty, fast, night, False), [])
+    broke = plan([whole, piece], {}, 0, fast, night, False)
+    check("nothing to spend plans nothing", [row["bytes"] for row in broke], [0, 0])
+    check("and every item still says why", [bool(row["reason"]) for row in broke], [True, True])
+    check(
+        "an item that is already complete is not planned again",
+        plan([_item("40-done.py", 100 * MiB, partial=True, part_bytes=100 * MiB)],
+             {}, plenty, fast, night, False),
+        [{"name": "40-done.py", "bytes": 0, "reason": "nothing left to fetch"}],
+    )
+    # What a front end that has no state.json of its own hands back: the same
+    # items, carrying their own progress. Both spellings have to plan alike or
+    # the screen and the runner would be projecting different nights.
+    # A front end holding a snapshot has no state.json; one holding the facts
+    # may well hand those over instead. Either is enough to plan from, and the
+    # wrong one is not a traceback on a phone screen.
+    check(
+        "the facts stand in for a state file that is not there",
+        [row["bytes"] > 0 for row in plan(trio, {"items": []}, plenty, fast, night, False)],
+        [True, True, False],
+    )
+    check(
+        "progress reads the same off the item as off the state file",
+        plan([_item("40-part.py", 200 * MiB, partial=True, part_bytes=150 * MiB)],
+             {}, plenty, fast, night, False)[0]["bytes"],
+        plan([{k: v for k, v in _item("40-part.py", 200 * MiB, partial=True).items()
+               if k != "part_bytes"}],
+             {"items": {"40-part.py": {"part_bytes": 150 * MiB}}},
+             plenty, fast, night, False)[0]["bytes"],
+    )
+
+    # And the same invariant again over nights nobody picked: budgets, rates,
+    # windows and orders drawn from a seeded generator, so a failure is a
+    # failure anyone can reproduce rather than one that happened once.
+    dice = random.Random(20260902)
+    pool = four + [
+        _item("44-tiny.py", 3 * MiB),
+        _item("45-part-min.py", 4000 * MiB, partial=True, slice_min=MiB),
+    ]
+    stretched: list[tuple] = []
+    for _ in range(200):
+        order = dice.sample(pool, len(pool))
+        cash = dice.randrange(0, 2000 * MiB)
+        speed = dice.choice([1.0, 100 * 1024.0, float(MiB), 8.0 * MiB])
+        span = dice.choice([0.0, 900.0, 3600.0, 8 * 3600.0, NO_DEADLINE])
+        blind_night = dice.choice([True, False])
+        rows = plan(order, {}, cash, speed, span, blind_night)
+        if sum(row["bytes"] for row in rows) > cash:
+            stretched.append((cash, speed, span, blind_night, [r["name"] for r in rows]))
+    check("nor does any of 200 nights nobody chose", stretched[:1], [])
+
+    # What snapshot() hands a projection: the working time tonight has, and the
+    # items carrying what each one already holds. **Every verdict that
+    # downloads nothing is a night of no length at all** — a screen given hours
+    # on a night the switch is off would draw a line promising a queue that is
+    # not going to run — and the blind night is the one with no stop time,
+    # which is the same NO_DEADLINE the runner works to.
+    listed = [
+        {
+            "name": "40-x.py",
+            "cap": MiB,
+            "partial": False,
+            "slice_min": SLICE_MIN_BYTES,
+            "desc": "x",
+        }
+    ]
+    open_doc = {
+        "reading": {"live": True, "age_seconds": 0, "online": True},
+        "free": {"left_bytes": 700 * MiB, "grant_bytes": 763 * MiB},
+        "today": {"remainder_bytes": 900 * MiB},
+        "paid": {"left_bytes": 0},
+        "reset": {"seconds_until": 1800},
+    }
+    waiting_doc = json.loads(json.dumps(open_doc))
+    waiting_doc["reset"]["seconds_until"] = 7200
+    broke_doc = json.loads(json.dumps(open_doc))
+    broke_doc["today"]["remainder_bytes"] = reserve_bytes()
+    pinned = 1_785_758_400.0
+    saved_snap = {
+        name: globals()[name]
+        for name in ("now", "queued_items", "portal_now", "load_state")
+    }
+    globals()["now"] = lambda: pinned
+    globals()["load_state"] = lambda: {
+        "items": {"40-x.py": {"part_bytes": 7, "attempts": 2}}
+    }
+    globals()["queued_items"] = lambda: (listed, [])
+    try:
+        globals()["portal_now"] = lambda: (json.loads(json.dumps(open_doc)), "")
+        check(
+            "an open window has until the stop time to work in",
+            snapshot()["night_seconds"],
+            1800 - STOP_MARGIN,
+        )
+        check(
+            "and the items carry what a projection needs of them",
+            snapshot()["items"][0],
+            {
+                "name": "40-x.py",
+                "cap": MiB,
+                "partial": False,
+                "slice_min": SLICE_MIN_BYTES,
+                "part_bytes": 7,
+                "desc": "x",
+                "attempts": 2,
+            },
+        )
+        globals()["portal_now"] = lambda: (json.loads(json.dumps(waiting_doc)), "")
+        early = snapshot()
+        check("a window not yet open is still a night", early["verdict"], "early")
+        check(
+            "and it is measured from the opening, not from now",
+            early["night_seconds"],
+            window_seconds() - STOP_MARGIN,
+        )
+        globals()["portal_now"] = lambda: (json.loads(json.dumps(broke_doc)), "")
+        spent_night = snapshot()
+        check("a night with nothing to spend still has time", spent_night["verdict"], "spent")
+        check("which is time it keeps", spent_night["night_seconds"] > 0, True)
+        globals()["portal_now"] = lambda: (None, "no route to the portal")
+        # Inside the window for this one, since the gate answers "early" ahead
+        # of the portal and the check would then be about the clock instead.
+        globals()["now"] = lambda: pinned + 40_000
+        check(
+            "no reading is no night at all",
+            (snapshot()["verdict"], snapshot()["night_seconds"]),
+            ("no-portal", 0.0),
+        )
+        # Nothing may cut a blind download short for the time, so the night it
+        # is given is the one with no end: the projection then plans the whole
+        # of what the items declared, in one pass, exactly as the run does.
+        blind_night = snapshot(blind=True)
+        check(
+            "and a blind night has no stop time",
+            (blind_night["verdict"], blind_night["night_seconds"]),
+            ("blind", NO_DEADLINE),
+        )
+        save_config({"auto": False})
+        switched_off = snapshot()
+        check(
+            "a switch that is off is a night of no length",
+            (switched_off["verdict"], switched_off["night_seconds"]),
+            ("off", 0.0),
+        )
+        save_config({})
+        globals()["queued_items"] = lambda: ([], [])
+        globals()["portal_now"] = lambda: (json.loads(json.dumps(open_doc)), "")
+        check(
+            "so is an empty queue",
+            (snapshot()["verdict"], snapshot()["night_seconds"]),
+            ("empty", 0.0),
+        )
+    finally:
+        globals().update(saved_snap)
+        save_config({})
+
+    # fire() asks admit() and does what it says. The arithmetic is pinned
+    # above; what is pinned here is the wiring, because a firing that kept its
+    # own copy of these rules would go on downloading exactly as the screen
+    # said it would not. Run on a queue of its own, with the portal answering
+    # from a fixed reading and the clock pinned, so the only thing that decides
+    # anything is admit().
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        moved = {
+            "ROOT": root,
+            "QUEUE": root / "queue",
+            "STAGING": root / "queue" / ".staging",
+            "WORK": root / "work",
+            "OUT": root / "out",
+            "DONE": root / "done",
+            "FAILED": root / "failed",
+            "LOGS": root / "logs",
+            "STATE_FILE": root / "state.json",
+            "CONFIG_FILE": root / "config.json",
+            "HEARTBEAT": root / "heartbeat",
+        }
+        said: list[str] = []
+        reading = {
+            "reading": {"live": True, "age_seconds": 0, "online": True},
+            "free": {"left_bytes": 700 * MiB, "grant_bytes": 763 * MiB},
+            "today": {"remainder_bytes": 900 * MiB},
+            "paid": {"left_bytes": 0},
+            "reset": {"seconds_until": 3600},
+        }
+        stubs = {
+            "read_portal": lambda: json.loads(json.dumps(reading)),
+            "notify": lambda title, content: None,
+            "log": said.append,
+            # Pinned, so the window this firing sees is the same one every
+            # time it is run — including at 23:59, when the real one has shut.
+            "now": lambda: 1_785_758_400.0,
+        }
+        saved_fire = {name: globals()[name] for name in list(moved) + list(stubs)}
+        globals().update(moved)
+        globals().update(stubs)
+        try:
+            queued = moved["QUEUE"]
+            queued.mkdir(parents=True, exist_ok=True)
+            script = queued / "40-marker.sh"
+            script.write_text(
+                "# EXPIRE: v1\n"
+                "# EXPECT_BYTES: 1048576\n"
+                "# DESC: a script that exits at once\n"
+                'touch "$EXPIRE_OUT/marker"\n',
+                encoding="utf-8",
+            )
+            marker = moved["OUT"] / "40-marker.sh" / "marker"
+
+            asked: list[tuple] = []
+
+            def _refuse(*args, **kwargs) -> tuple[int, str]:
+                """Refuse everything, and keep what the firing asked about."""
+                asked.append(args)
+                return 0, "nope"
+
+            saved_admit = globals()["admit"]
+            globals()["admit"] = _refuse
+            try:
+                refusing = fire(force=True)
+            finally:
+                globals()["admit"] = saved_admit
+            # The other half of "one rule at both ends": the firing must ask
+            # about the item at the same speed the projection planned it at,
+            # or a line drawn at one rate would be describing a night worked
+            # at another. Nothing else in either end may halve it again.
+            check(
+                "the firing asks about the item at the working rate",
+                [(args[0]["name"], args[3]) for args in asked],
+                [("40-marker.sh", working_rate(BOOTSTRAP_BPS))],
+            )
+            check("a firing that admits nothing is not a failed one", refusing, 0)
+            check("what admit() refuses does not run", marker.exists(), False)
+            check("and stays in the queue", script.exists(), True)
+            check(
+                "and the log carries admit()'s reason for it",
+                "skip 40-marker.sh: nope" in said,
+                True,
+            )
+
+            said.clear()
+            check("the same firing runs it once admit() allows it", fire(force=True), 0)
+            check("the item ran", marker.exists(), True)
+            check("and left the queue by rename", script.exists(), False)
+        finally:
+            globals().update(saved_fire)
 
     # The reaper. Its whole test is "past its stop time", and a blind run has
     # no stop time to be past — so the clock cannot answer and the lock has to.
