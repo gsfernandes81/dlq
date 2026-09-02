@@ -66,6 +66,8 @@ complete -c dlq -n "__dlq_after path" -a "(dlq names 2>/dev/null)"
 complete -c dlq -n "__dlq_after dest; and test (count (commandline -opc)) -eq 2" \
     -a video -d "where ytq puts finished videos"
 complete -c dlq -n "__dlq_after dest; and test (count (commandline -opc)) -eq 2" \
+    -a audio -d "where ytq puts audio-only downloads"
+complete -c dlq -n "__dlq_after dest; and test (count (commandline -opc)) -eq 2" \
     -a file -d "where dlq puts finished files"
 complete -c dlq -n "__dlq_after dest; and test (count (commandline -opc)) -ge 3" \
     -a default -d "put the built-in default back"
@@ -78,9 +80,9 @@ complete -c dlq -n "__dlq_after dest; and test (count (commandline -opc)) -ge 3"
 # `dlq names` is the one exception and it only walks directories. The
 # self-test's own pin is on the other side of it: expire_sched checks that
 # every setting the runner has is one it can say a sentence about.
-function __dlq_setting -d "the setting being given a value is one of these"
+function __dlq_setting -d "the setting is one of these, and its value is next"
     set -l tokens (commandline -opc)
-    test (count $tokens) -ge 3; or return 1
+    test (count $tokens) -eq 3; or return 1
     test $tokens[2] = settings; or return 1
     contains -- $tokens[3] $argv
 end
@@ -93,7 +95,7 @@ complete -c dlq -n "__dlq_after settings; and test (count (commandline -opc)) -e
     -a reserve-when-paid -d "keep it when paid data is there"
 complete -c dlq -n "__dlq_after settings; and test (count (commandline -opc)) -eq 2" \
     -a auto -d "let the nightly job download"
-complete -c dlq -n "__dlq_after settings; and test (count (commandline -opc)) -ge 3" \
+complete -c dlq -n "__dlq_after settings; and test (count (commandline -opc)) -eq 3" \
     -a default -d "put the built-in default back"
 complete -c dlq -n "__dlq_setting auto" -a on -d "the nightly job downloads"
 complete -c dlq -n "__dlq_setting auto" -a off \

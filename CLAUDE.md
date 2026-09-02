@@ -119,7 +119,17 @@ Decisions that travel with this code — each was arrived at the hard way:
   rule reads as the default rather than raising: this is read at the top of a
   firing nobody is watching, and a stray character typed into the file must
   not be able to stop a night's downloads or take out the reserve on its way
-  past — `dlq settings` and `dlq dump` name what they declined instead. The
+  past — `dlq settings` and `dlq dump` name what they declined instead.
+  **Reading a broken `config.json` is forgiving; writing over one is refused**
+  — `load_config` answers a file that will not parse with an empty dict, so a
+  save on top of it would be a fresh file holding only the new key, with the
+  destinations and the other settings gone under a line saying it worked.
+  `config_problem` is the one line that says so: `set_setting` and `set_dest`
+  refuse with it and write nothing, and both screens and the dump print it.
+  And **whether a stored value is in force is one function's answer** —
+  `setting_state`, keyed on the key being *present*, because the three places
+  that show the settings each used to decide it and a file holding `null` read
+  as refused on the screen and as nothing at all from the command. The
   reserve is waived on `paid.left_bytes > 0`, never on a threshold, because
   `paid.left_bytes` can only understate what is actually paid for while
   `free.left_bytes` can only overstate what is actually free — "there is paid

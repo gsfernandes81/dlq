@@ -1,11 +1,11 @@
 #!/data/data/com.termux/files/usr/bin/python3
 """Arm, inspect and tear down the expiring-allowance download queue.
 
-The queue runs in the hour before 00:00 UTC, spending free data that would
-otherwise be wiped at the reset. This script manages the Android JobScheduler
-registration and draws the two screens; every decision about whether to
-actually download lives in :mod:`expire_runner`, which the platform invokes
-directly.
+The queue runs in the window before 00:00 UTC — an hour unless ``dlq settings
+window`` says otherwise — spending free data that would otherwise be wiped at
+the reset. This script manages the Android JobScheduler registration and draws
+the two screens; every decision about whether to actually download lives in
+:mod:`expire_runner`, which the platform invokes directly.
 
 The two screens are :func:`compose_status` — what happens next, and what that
 turns on — and :func:`compose_list`, where every download is and how much of it
@@ -1624,8 +1624,16 @@ def set_dest(kind: str, value: str) -> tuple[bool, list[str]]:
     A directory that does not exist is created, one level and no more: a typo
     should not quietly build a tree nobody meant, and its parent missing is the
     signal that this is a typo rather than a new folder.
+
+    A ``config.json`` that will not parse stops it before anything is written:
+    :func:`expire_runner.load_config` answers one with an empty dict, so a
+    save on top of it would be a fresh file holding this destination alone,
+    with the other two and the four settings gone under a success line.
     """
     runner = _runner()
+    broken = runner.config_problem()
+    if broken:
+        return False, [broken]
     config = runner.load_config()
     if value == "default":
         config.pop(f"{kind}_dir", None)
@@ -1723,7 +1731,6 @@ def show_settings(argv: list[str]) -> int:
     paint = _paint()
     if not argv:
         width = _width()
-        config = runner.load_config()
         values = runner.settings()
 
         def note(text: str, tone: str) -> None:
@@ -1731,19 +1738,28 @@ def show_settings(argv: list[str]) -> int:
             for line in _wrap(text, width - 2):
                 print(f"  {paint(line, tone)}")
 
+        # The file's own fault first and once, because it is the reason all
+        # four below read as their defaults and because nothing can be changed
+        # until it is fixed — four settings saying "default" with nothing
+        # explaining it is the version of this that gets the file rewritten.
+        broken = runner.config_problem()
+        if broken:
+            note(f"✗ {broken}", "31")
+            note("the four below are the built-in ones; nothing can be set", "90")
+            print()
+
         for number, (name, spec) in enumerate(runner.SETTINGS.items()):
             if number:
                 print()
-            stored = config.get(spec["key"])
             # A stored value that fails its rule is not the one in force, so
             # the word under it may not read "set": what is shown above is the
             # default, and the red line says which value was declined and why.
             # Reading "set" over the default's figure is the one way this
-            # screen could lie about what tonight is going to do.
-            problem = None if stored is None else runner.setting_problem(name, stored)
+            # screen could lie about what tonight is going to do. Asked of the
+            # runner, which is where the screen and the dump ask it too.
+            stored, problem, where = runner.setting_state(name)
             print(paint(name, "1"))
             note(runner.spell_setting(name, values[name]), "")
-            where = "set" if stored is not None and not problem else "default"
             note(f"{where}, {spec['label']}", "90")
             if problem:
                 note(f"✗ config.json says {stored!r}: {problem}", "31")
@@ -1795,6 +1811,10 @@ def set_setting(name: str, text: str) -> tuple[bool, list[str]]:
     line, and on a success the last line is what the setting *is* now, which
     is what the screen flashes and what the command prints.
 
+    A ``config.json`` that will not parse is refused here for the reason
+    :func:`set_dest` refuses it: a save on top of an unreadable file is a save
+    of everything else in it, thrown away.
+
     ``default`` is handled here rather than in
     :func:`expire_runner.parse_setting`, exactly as it is for the
     destinations: putting a setting back is *removing* the key, and parsing
@@ -1805,6 +1825,12 @@ def set_setting(name: str, text: str) -> tuple[bool, list[str]]:
     runner = _runner()
     if name not in runner.SETTINGS:
         return False, [f"{name!r} is not a setting; try {_setting_names()}"]
+    # Before anything else, and before the value is even read: what is on the
+    # disk cannot be added to if it cannot be parsed, and saving anyway would
+    # replace the destinations and the other three settings with this one.
+    broken = runner.config_problem()
+    if broken:
+        return False, [broken]
     config = runner.load_config()
     key = runner.SETTINGS[name]["key"]
     if text.strip().lower() == "default":
@@ -1912,12 +1938,12 @@ def run_one(row: dict, assume_yes: bool = False) -> int:
     """Download one queued item now, outside the nightly window.
 
     Every guard the runner carries is about the *expiring* allowance: spend it
-    before it is wiped, leave 100 MB behind, never reach into the paid reserve.
-    Asking for a download now is asking to spend the paid reserve on purpose, so
-    those guards do not apply here and — this is the part worth being explicit
-    about — they are not quietly reimplemented as something weaker either. The
-    item is run with the remainder of its own declared cap as its slice and no
-    deadline, and the user is told the number first.
+    before it is wiped, leave the reserve behind, never reach into the paid
+    reserve. Asking for a download now is asking to spend the paid reserve on
+    purpose, so those guards do not apply here and — this is the part worth
+    being explicit about — they are not quietly reimplemented as something
+    weaker either. The item is run with the remainder of its own declared cap
+    as its slice and no deadline, and the user is told the number first.
 
     What is kept is everything that makes it safe to stop: the same work
     directory, so ctrl-c resumes rather than restarts and the nightly window can
@@ -2023,7 +2049,7 @@ def run_blind(assume_yes: bool = False) -> int:
 
     What ``dlq now`` is for one item, this is for the queue, and for the same
     reason: every nightly guard is derived from ``ic.zwana.io`` — spend the
-    allowance that is expiring, leave 100 MB of it behind, stay out of the paid
+    allowance that is expiring, leave the reserve behind, stay out of the paid
     reserve — and when the phone is on mobile data there is no portal to derive
     any of them from. So they do not apply, they are not quietly reimplemented
     as something weaker, and the number is said before anyone is asked.
@@ -2299,6 +2325,33 @@ def _fake_facts(verdict: str = "early", **changes) -> dict:
 
 
 def _self_test() -> int:
+    """Run the checks against a ``config.json`` of their own.
+
+    :mod:`expire_runner` reads the window, the reserve, its paid-data waiver
+    and the auto switch out of that file every time it is asked, and these
+    checks ask — the status screens are drawn from a snapshot built with the
+    real :func:`expire_runner.window_seconds` and :func:`floor_bytes`. A
+    developer who had set any of them would therefore get different answers
+    from the same checks, and the push gate would pass or fail depending on
+    whose phone it ran on. The whole run is pointed at an empty file in a
+    temporary directory instead, the way the runner's own self-test is: what
+    is checked is the built-in figure, and what a check sets it writes there
+    and throws away. The blocks below that want a config file of their own
+    still swap this for one in their own tree; they restore this one.
+    """
+    import tempfile
+
+    runner = _runner()
+    saved_config = runner.CONFIG_FILE
+    with tempfile.TemporaryDirectory() as sandbox:
+        runner.CONFIG_FILE = Path(sandbox) / "config.json"
+        try:
+            return _checks()
+        finally:
+            runner.CONFIG_FILE = saved_config
+
+
+def _checks() -> int:
     """Offline checks on the anchoring and the listing. No API, no network.
 
     Most of it guards one failure: a non-editable install puts this module in
@@ -2343,6 +2396,20 @@ def _self_test() -> int:
         else:
             failed += 1
             print(f"FAIL {label}: {got} exceeds {limit}", file=terminal)
+
+    # The config file first, because everything after it is read through the
+    # runner's settings: the status screens below are composed with the real
+    # window and the real floor, so a developer who had set either would get
+    # different answers from the same checks. :func:`_self_test` points the
+    # whole run at a file of its own; this is the pin on its doing so, since
+    # the swap is one line in a caller and the symptom is a check that fails
+    # only on somebody else's phone.
+    check(
+        "the checks read a config.json of their own",
+        _runner().CONFIG_FILE != ROOT / "config.json",
+        True,
+    )
+    check("so the window is the built-in hour", _runner().window_seconds(), 3600)
 
     check("the root is ytq's root, not this file's dir", ROOT, ytq.HERE)
     check("the queue is the one ytq writes into", QUEUE, ytq.QUEUE)
@@ -3257,7 +3324,11 @@ def _self_test() -> int:
                     key = runner.SETTINGS[name]["key"]
                     worked, said_lines = set_setting(name, text)
                     check(f"{name} takes a typed value", worked, True)
-                    check(f"and {name} reads back as it", runner.settings()[name], value)
+                    check(
+                        f"and {name} reads back as it",
+                        runner.settings()[name],
+                        value,
+                    )
                     check(
                         f"and {name} is in config.json",
                         runner.load_config().get(key),
@@ -3331,9 +3402,10 @@ def _self_test() -> int:
                             any(line == name for line in drawn),
                             True,
                         )
+                    shown = out.getvalue()
                     check(
                         f"and both forms are shown at {width}",
-                        ("NAME VALUE" in out.getvalue(), "NAME default" in out.getvalue()),
+                        ("NAME VALUE" in shown, "NAME default" in shown),
                         (True, True),
                     )
                     with _quiet() as (_, err):
@@ -3378,6 +3450,80 @@ def _self_test() -> int:
                     runner.SETTINGS["window"]["default"],
                 )
                 set_setting("window", "default")
+
+                # A stored null, at this end. The screen calls it a value it
+                # is declining; so must this, or the same config.json reads
+                # as two different files depending on which one is open.
+                runner.save_config({"auto": None})
+                with _quiet() as (out, _):
+                    show_settings([])
+                shown = out.getvalue()
+                check(
+                    "a stored null is named as declined",
+                    "✗ config.json says None" in shown,
+                    True,
+                )
+                check(
+                    "and nothing reads as set out of it",
+                    any(
+                        line.strip().startswith("set,")
+                        for line in shown.splitlines()
+                    ),
+                    False,
+                )
+                check("which is what is in force", runner.auto_enabled(), True)
+
+                # A config.json that will not parse. load_config answers one
+                # with an empty dict — which is what keeps a firing going —
+                # so a save on top of it would write a fresh file holding the
+                # one new key, with the destinations and the other settings
+                # gone under a line saying it worked. Nothing may write.
+                slip = '{\n  "video_dir": "/sdcard/Films",\n  "auto": false,\n}\n'
+                runner.CONFIG_FILE.write_text(slip, encoding="utf-8")
+                worked, said_lines = set_setting("auto", "on")
+                check("a setting over a config.json slip is refused", worked, False)
+                check(
+                    "and says the file will not parse",
+                    said_lines[-1].startswith("config.json will not parse"),
+                    True,
+                )
+                worked, said_lines = set_dest("video", str(root))
+                check("a destination over the same slip is refused", worked, False)
+                check(
+                    "in the same words",
+                    said_lines[-1].startswith("config.json will not parse"),
+                    True,
+                )
+                # The evidence: byte for byte what was there before. A
+                # rewritten file is the loss this whole refusal exists for.
+                check(
+                    "and the file is untouched",
+                    runner.CONFIG_FILE.read_text(encoding="utf-8"),
+                    slip,
+                )
+                os.environ["COLUMNS"] = "40"
+                with _quiet() as (out, _):
+                    code = show_settings([])
+                shown = out.getvalue()
+                check("the list still comes out over a slip", code, 0)
+                check(
+                    "and names the file that will not parse",
+                    "config.json will not parse" in shown,
+                    True,
+                )
+                at_most(
+                    "the list over a slip at 40",
+                    max(len(line) for line in shown.splitlines()),
+                    40,
+                )
+                with _quiet() as (out, _):
+                    dump()
+                check(
+                    "and the dump carries it too",
+                    "config.json will not parse" in out.getvalue(),
+                    True,
+                )
+                runner.save_config({})
             finally:
                 for name, value in was.items():
                     setattr(runner, name, value)
@@ -3509,13 +3655,16 @@ def dump(target: str | None = None) -> int:
 
     def _settings() -> None:
         runner = _runner()
-        config = runner.load_config()
         values = runner.settings()
         print(f"  {'config.json':<18}: {runner.CONFIG_FILE}")
-        for name, spec in runner.SETTINGS.items():
-            stored = config.get(spec["key"])
-            problem = None if stored is None else runner.setting_problem(name, stored)
-            where = "set" if stored is not None and not problem else "default"
+        # The whole file being unreadable outranks anything said about one
+        # setting: it is why all four read "default" below, and it is why the
+        # person filing the report could not change any of them.
+        broken = runner.config_problem()
+        if broken:
+            print(f"    {broken}")
+        for name in runner.SETTINGS:
+            stored, problem, where = runner.setting_state(name)
             spelled = runner.spell_setting(name, values[name])
             print(f"  {name:<18}: {spelled:<8} ({where})")
             # The value being declined, not just the fact that one is: a

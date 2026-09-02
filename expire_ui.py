@@ -2095,21 +2095,27 @@ def settings_lines(width: int) -> list[tuple[int, str, str]]:
     A stored value that fails its rule is said out loud in red, because the
     runner's answer to one is to use the default and carry on: silence would
     leave a ``config.json`` saying 100 minutes over a screen saying 60 with
-    nothing between them to explain it.
+    nothing between them to explain it. Whether a stored value is the one in
+    force is :func:`expire_runner.setting_state`'s answer, not this screen's:
+    a screen and a command disagreeing about what the file holds is the same
+    fault as disagreeing about whether a change took.
+
+    A file that will not parse at all is the first line, in the same red: it
+    is why every setting below reads as its built-in one, and pressing any of
+    the keys will be refused until it is fixed.
     """
     runner = sched._runner()
-    config = runner.load_config()
     values = runner.settings()
     lines: list[tuple[int, str, str]] = []
+    broken = runner.config_problem()
+    if broken:
+        lines += [(2, text, "31") for text in _wrap(f"✗ {broken}", width - 4, "  ")]
     for letter, (name, spec) in zip(
         SETTING_KEYS, runner.SETTINGS.items(), strict=False
     ):
         if lines:
             lines.append((0, "", ""))
-        stored = config.get(spec["key"])
-        problem = (
-            runner.setting_problem(name, stored) if spec["key"] in config else None
-        )
+        stored, problem, note = runner.setting_state(name)
         # The value is on the name's line rather than under it, which is what
         # keeps four settings on a phone: they are two or three words each,
         # unlike the destinations' paths, and the four lines a block would
@@ -2118,7 +2124,6 @@ def settings_lines(width: int) -> list[tuple[int, str, str]]:
         lines.append((2, _fit(head, width - 4), "head"))
         # A value that is in the file but is being ignored is not "set": what
         # is in force is the built-in one, and the red line below says why.
-        note = "set" if spec["key"] in config and not problem else "default"
         lines += [
             (5, text, "90")
             for text in _wrap(f"{note} · {spec['label']}", width - 6, "  ")
@@ -2145,9 +2150,9 @@ def settings_screen(win, paint: dict) -> tuple[str, bool]:
     The two switches flip where they stand — there is nothing to type, and a
     prompt asking for the word "off" over a screen already showing "on" is a
     step for nothing. The two numbers open a field with the current number in
-    it, digits only: the unit is the setting's, not something anyone should
-    have to spell, and the note says so along with the way to put the built-in
-    one back.
+    it: the unit is the setting's, not something anyone should have to spell,
+    and the note says so along with the way to put the built-in one back,
+    which is the word ``default`` typed into the same field.
 
     A change returns, the way a destination does, so that what it now says
     lands in the receipts and the queue's own screen is re-read with it in
@@ -2837,6 +2842,7 @@ def _self_test() -> int:
                 any(text.startswith("set · ") for text in texts),
                 False,
             )
+
             # The same rule with a problem taking up room: the wrapped red
             # line may cost the last meaning line, never a setting's name.
             for width in (32, 40):
@@ -2847,6 +2853,66 @@ def _self_test() -> int:
                     len(named),
                     len(runner.SETTINGS),
                 )
+
+            # A stored null. The runner refuses it like any other value it
+            # cannot use, and this screen and `dlq settings` have to say the
+            # same thing about it: the pair used to disagree, this screen
+            # calling it refused and the command calling it nothing at all.
+            store({"auto": None})
+            drawn = settings_lines(80)
+            texts = [text for _, text, _ in drawn]
+            check(
+                "a stored null is named as the value being declined",
+                any(text.startswith("✗ config.json says None") for text in texts),
+                True,
+            )
+            check(
+                "and the setting reads as the built-in one",
+                any(text.startswith("default · ") for text in texts),
+                True,
+            )
+            check("which is what the switch is", runner.auto_enabled(), True)
+
+            # A file that will not parse. Every setting falls back, and the
+            # screen would otherwise show four defaults with nothing saying
+            # why — and its keys would rewrite the file down to one key.
+            runner.CONFIG_FILE.write_text('{"auto": false, }\n', encoding="utf-8")
+            for width in (32, 40, 80):
+                drawn = settings_lines(width)
+                for indent, text, _colour in drawn:
+                    at_most(
+                        f"a settings line over a broken config fits {width}",
+                        indent + len(text),
+                        width - 1,
+                    )
+                check(
+                    f"the file's own fault is said at {width}",
+                    any(
+                        text.startswith("✗ config.json will not")
+                        for _, text, _ in drawn
+                    ),
+                    True,
+                )
+                check(
+                    f"in the colour a problem is said in at {width}",
+                    {tone for _, text, tone in drawn if text.startswith("✗")},
+                    {"31"},
+                )
+            check(
+                "and no setting claims to be set out of it",
+                any(text.startswith("set · ") for _, text, _ in settings_lines(80)),
+                False,
+            )
+            # And the key that would have written it refuses, with the same
+            # line: a screen that flashed "auto is now off" over a file it had
+            # just replaced with one key is the failure being pinned.
+            worked, said = sched.set_setting("auto", "off")
+            check("a change over a broken config is refused", worked, False)
+            check(
+                "and the flash is the file's own fault",
+                said[-1].startswith("config.json will not parse"),
+                True,
+            )
 
             # The switch is the one setting the queue screen itself has to
             # admit to: a night that downloaded nothing is explained by it.

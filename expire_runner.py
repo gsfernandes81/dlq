@@ -72,7 +72,7 @@ Usage::
 
 Checking it
 -----------
-``python3 expire_runner.py --self-test`` runs 130 offline checks. It takes
+``python3 expire_runner.py --self-test`` runs 142 offline checks. It takes
 neither the lock nor the heartbeat, so it is safe to run while a firing is live.
 
 Two parts are worth not weakening. The **timezone sweep**: the checks pin the
@@ -267,6 +267,41 @@ def load_config() -> dict:
         return {}
 
 
+def config_problem() -> str | None:
+    """Why ``config.json`` cannot be read, or ``None`` if it can be.
+
+    :func:`load_config` answers a file it cannot parse with an empty dict,
+    which is right for a firing — a stray character in a file must not stop a
+    night's downloads — and wrong for anything that *writes*: saving on top of
+    an empty dict is saving a fresh file holding only the new key, and the
+    destinations and settings that were in there are gone with a success line
+    printed over them. So everything that sets asks this first and refuses,
+    and the two screens and the dump say the same line rather than showing
+    four settings reading "default" for a reason nothing states.
+
+    A file that is not there is not a problem: nothing has been set yet, and
+    that is what an empty config means everywhere else here. Neither is an
+    empty one — a shell redirect leaves that, and there is nothing in it to
+    lose.
+    """
+    try:
+        raw = CONFIG_FILE.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if not raw.strip():
+        return None
+    try:
+        found = json.loads(raw)
+    except ValueError as exc:
+        return f"config.json will not parse: {exc}"
+    # Valid JSON that is not an object is the same loss by another route:
+    # load_config declines it exactly as quietly, and a save on top of it
+    # would take the file with it.
+    if not isinstance(found, dict):
+        return f"config.json is a {type(found).__name__}, not a set of settings"
+    return None
+
+
 def save_config(config: dict) -> None:
     """Atomic, like the state file: a kill must not leave it half-written."""
     ROOT.mkdir(parents=True, exist_ok=True)
@@ -365,6 +400,38 @@ def setting_problem(name: str, raw: object) -> str | None:
     if raw % spec["step"]:
         return f"{name} is a multiple of {spec['step']} {unit}"
     return None
+
+
+def setting_state(name: str) -> tuple[object, str | None, str]:
+    """What ``config.json`` holds for *name*: ``(stored, why refused, where)``.
+
+    *where* is ``"set"`` when the stored value is the one in force and
+    ``"default"`` when the built-in one is, and *stored* is what the file
+    holds — the evidence a refusal is reported with, since a phone spending by
+    a figure nobody recognises is explained by the value, not by the fact that
+    there was one.
+
+    The one judge of a question three places used to answer for themselves:
+    ``dlq settings``, ``dlq dump`` and the settings screen each decided
+    whether a value was in force, two of them on ``config.get(key) is None``
+    and one on ``key in config``, so a file holding ``null`` read as "set and
+    refused" on the screen and as "default, nothing to say" from the command.
+    It is keyed on the key being **present**: a stored ``null`` is a value
+    somebody stored, and it is refused like any other value the setting does
+    not take.
+
+    A ``config.json`` that will not parse holds nothing anything can read, so
+    every setting reads "default" here with nothing to say about it;
+    :func:`config_problem` is the line that says why, printed once by each
+    front end rather than four times over.
+    """
+    spec = SETTINGS[name]
+    config = load_config()
+    if spec["key"] not in config:
+        return None, None, "default"
+    stored = config[spec["key"]]
+    problem = setting_problem(name, stored)
+    return stored, problem, "default" if problem else "set"
 
 
 def settings() -> dict[str, object]:
@@ -1968,6 +2035,67 @@ def _checks() -> int:
         bool(setting_problem("auto", 1)),
         True,
     )
+
+    # Whether a stored value is the one in force, decided in one place. The
+    # command, the dump and the screen each used to decide it for themselves —
+    # two of them on the value not being None and one on the key being there —
+    # so a file holding null read as "set and refused" on the screen and as
+    # "nothing stored" from the command, about the same file.
+    save_config({"window_minutes": 120})
+    check(
+        "a stored value that holds is set",
+        setting_state("window"),
+        (120, None, "set"),
+    )
+    check(
+        "a setting nobody stored is the default",
+        setting_state("auto"),
+        (None, None, "default"),
+    )
+    save_config({"window_minutes": 100})
+    check(
+        "a stored value that is refused is not set",
+        setting_state("window"),
+        (100, "window is a multiple of 15 minutes", "default"),
+    )
+    save_config({"auto": None})
+    check(
+        "a stored null is a stored value, and refused like one",
+        setting_state("auto"),
+        (None, "auto is on or off", "default"),
+    )
+    check("and the built-in one is what runs", auto_enabled(), True)
+
+    # config.json itself. A file that will not parse reads as empty
+    # everywhere, which is what keeps a firing going; what must never happen
+    # is a *save* on top of it, because that writes a fresh file holding only
+    # the new key and everything else that was in there is gone.
+    CONFIG_FILE.unlink(missing_ok=True)
+    check("a config.json that is not there is not a problem", config_problem(), None)
+    CONFIG_FILE.write_text("", encoding="utf-8")
+    check("nor is an empty one", config_problem(), None)
+    save_config({"window_minutes": 45})
+    check("nor one that parses", config_problem(), None)
+    CONFIG_FILE.write_text('{"video_dir": "/sd", }\n', encoding="utf-8")
+    broken = config_problem()
+    check(
+        "one with a trailing comma is, and names the file",
+        (broken or "").startswith("config.json will not parse: "),
+        True,
+    )
+    check("the settings still read, as the defaults", window_seconds(), 3600)
+    check(
+        "and nothing claims to be set out of a file nobody can read",
+        setting_state("window"),
+        (None, None, "default"),
+    )
+    CONFIG_FILE.write_text("[1, 2]\n", encoding="utf-8")
+    check(
+        "JSON that is not a set of settings is the same loss",
+        bool(config_problem()),
+        True,
+    )
+    CONFIG_FILE.unlink(missing_ok=True)
 
     # What may be typed. Generous about the unit, strict about the value: the
     # phone keyboard makes "45m" likelier than "45", and a unit somebody

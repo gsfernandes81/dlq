@@ -549,16 +549,28 @@ instead, and `dlq settings` and `dlq dump` both say which stored value they
 declined and why, rather than letting a stray character in a file stop a
 night's downloads.
 
+A `config.json` that will not parse **at all** — a trailing comma, a missing
+brace — is the same for the runner: every setting reads as its default and the
+night goes ahead. It is not the same for changing one. `dlq settings NAME
+VALUE` and `dlq dest KIND PATH` refuse and write nothing, saying which file
+will not parse, and the two screens say the same line in red, because saving
+on top of a file nothing can read means saving the one new key and losing the
+destinations and the other settings with it.
+
 **`reserve-when-paid no` waives the reserve; it does not lower it or remove
 the guarantee behind it.** With it set to `no`, the runner stops holding the
 configured reserve back on any reading where the portal says paid data is
-left — the free allowance can be spent right down to zero, since paid data is
-there to fall back on. It answers to the reading in hand, not to the night as
-a whole: paid data bought at 23:50 waives the reserve from the next poll on,
-and losing it partway through a run brings the reserve straight back for
-whatever is left to download. Left at the default, `yes`, the reserve is kept
-regardless of what is paid for, which is the point of having one for most
-people.
+left — the free allowance can be spent down to the runner's own margin, since
+nothing is being held back for the morning. That margin is not a second
+reserve to be waived in turn: it is the headroom the projection between portal
+polls needs, and the haircut the free figure is discounted by because the
+portal states it as an upper bound. Neither is money kept for you, and both
+stand with the reserve waived. The waiver answers to the reading in hand, not
+to the night as a whole: paid data bought at 23:50 waives the reserve from the
+next poll on, and losing it partway through a run brings the reserve straight
+back for whatever is left to download. Left at the default, `yes`, the reserve
+is kept regardless of what is paid for, which is the point of having one for
+most people.
 
 **`auto off` stops the nightly job from downloading; it does not stop the job
 from running.** The job stays armed and keeps firing every ~15 minutes; each
