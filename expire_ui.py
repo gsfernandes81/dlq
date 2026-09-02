@@ -108,6 +108,12 @@ HINTS = {
     "list": "↑↓ pick  ⏎ open  m move  q",
     "list-live": "x stop  ⏎ open  m move  q",
     "moving": "↑↓ move it   ⏎ drop it   esc cancel",
+    # The same screen with an item that does not exist yet held on it — ytq
+    # asking where a video it is about to write should go. Its own pair rather
+    # than "moving"'s, because nothing is being dropped and nothing is being
+    # cancelled: what ⏎ takes is a place, and esc leaves the video where it
+    # would have gone anyway, which is last.
+    "pick": "↑↓ move it  ⏎ take the place  esc no",
     "item": "press a key   q back",
     # The download-now screen promises that x stops it, so x has to work on
     # the screen it was promised from and not only on the listing.
@@ -132,6 +138,7 @@ TIGHT_HINTS = {
     "list": "↑↓  ⏎ open  m move  q",
     "list-live": "x stop  ⏎ open  m  q",
     "moving": "↑↓ move  ⏎ drop  esc no",
+    "pick": "↑↓ move  ⏎ take  esc no",
     "item": "a key, or q back",
     "item-live": "x stop  a key  q back",
     "dest": "v vid  a aud  f file  q back",
@@ -1461,6 +1468,57 @@ def preview(rows: list[dict], name: str, pos: int) -> list[dict]:
     return others[:pos] + moved + others[pos:] + rest
 
 
+def phantom_of(name: str, cap: int, partial: bool) -> tuple[dict, dict]:
+    """A download that does not exist yet, as ``(its row, its plan entry)``.
+
+    ytq's picker (:func:`pick_place`) holds a video it has not written on this
+    listing so that somebody can see where it lands. That takes two things and
+    exactly two: a row for the screen to draw, and an item for
+    :func:`expire_runner.plan` to count — because the whole worth of showing it
+    here is that the cut line and the shares are worked out **with it in**, in
+    the order it is being dragged to.
+
+    Spelled once, here, rather than at the two ends: a row the reader would
+    never have produced and a plan entry the runner would never have been
+    handed are both silent — the screen draws something plausible and lies
+    about the night. The row is what :func:`expire_sched.items` gives a queued
+    item that has fetched nothing; the entry is what
+    :func:`expire_runner.snapshot` gives one.
+
+    Nothing here is ever written. The pair lives for as long as the screen is
+    open and goes when it closes; what puts a file anywhere is :func:`place`,
+    afterwards, once ytq has actually written the item.
+    """
+    row = {
+        "name": name,
+        "where": "queued",
+        "cap": cap,
+        # No server has stated a size for a file nobody has asked for yet, so
+        # the figures cell reads "0 B of ≤300 MiB" — the declared cap with the
+        # ``≤`` that says it is a bound. An invented total would be the one
+        # number on this screen nobody measured.
+        "stated": 0,
+        "total": cap,
+        "have": 0,
+        "desc": "",
+        "error": "",
+        "files": [],
+        "lost": "",
+        #: Only ever true here, and read by nothing that changes anything: it
+        #: is what a reader of this list can ask to tell the row apart from a
+        #: download that is really in the queue.
+        "phantom": True,
+    }
+    item = {
+        "name": name,
+        "cap": cap,
+        "partial": partial,
+        "slice_min": sched._runner().SLICE_MIN_BYTES,
+        "part_bytes": 0,
+    }
+    return row, item
+
+
 def draw_list(
     win,
     paint: dict,
@@ -1470,6 +1528,7 @@ def draw_list(
     flash: str,
     moving: str = "",
     pos: int = 0,
+    phantom: tuple[dict, dict] | None = None,
 ) -> int:
     """Draw the listing and return the line it was scrolled to.
 
@@ -1486,10 +1545,19 @@ def draw_list(
     that have nothing else to say there — no download in flight, no flash,
     nothing in the air — because this is the screen a bare ``dlq`` opens and
     everything the old queue screen did is behind those three keys.
+
+    *phantom* is :func:`phantom_of`'s pair for an item that does not exist yet
+    — ytq's picker, and nothing else, passes one. Its row joins the list and
+    its plan entry joins the reading's items, so everything below this line
+    happens once, over a queue with one more thing in it: the same preview, the
+    same projection, the same cut. There is no second drawing of the listing
+    anywhere, which is the point — a picker with its own would be a screen
+    promising a night the queue's own screen disagrees with.
     """
     win.erase()
     height, width = win.getmaxyx()
-    shown = preview(queue.rows, moving, pos) if moving else queue.rows
+    rows = queue.rows if phantom is None else [*queue.rows, phantom[0]]
+    shown = preview(rows, moving, pos) if moving else rows
     if moving:
         cursor = next(
             (index for index, row in enumerate(shown) if row["name"] == moving), cursor
@@ -1500,12 +1568,18 @@ def draw_list(
             win,
             paint,
             (
-                f" queue — {len(queue.rows)} in {sched._short(sched.ROOT)} "
+                f" queue — {len(rows)} in {sched._short(sched.ROOT)} "
                 if width >= WIDE
                 else " queue "
             ),
         )
     facts = queue.tonight.facts
+    if phantom is not None and facts:
+        # A copy, and only the items replaced: the reading itself belongs to
+        # the thread that took it and to every other screen drawn from it, and
+        # an item nobody has queued must not end up in the figures that
+        # `dlq status` and the run-now confirm are read from.
+        facts = {**facts, "items": [*facts["items"], phantom[1]]}
     header = tonight_lines(facts, width, queue.live)
     if queue.tonight.note:
         # A reading that failed keeps the figures the last one gave and says so
@@ -1562,13 +1636,105 @@ def draw_list(
         paint,
         flash,
         hint(
-            "moving" if moving else ("list-live" if queue.mine() else "list"),
+            ("pick" if phantom else "moving")
+            if moving
+            else ("list-live" if queue.mine() else "list"),
             width,
         ),
         live,
     )
     win.refresh()
     return top
+
+
+def held_key(key: int, pos: int, room: int) -> tuple[int, str]:
+    """One key while a download is held: ``(where it is now, what it settled)``.
+
+    ``""`` while it is still in the air, ``"take"`` for the place it is at,
+    ``"leave"`` for none of it. Pure, and the one place the held keys are
+    spelled — an item being moved in the queue and a video ytq has not written
+    yet are held by the same two arrows, and a picker that answered ⏎
+    differently from the listing would be two screens that look identical
+    disagreeing about what enter means.
+
+    Everything else does nothing at all. This is the screen with a download in
+    the air on it, and a stray key here would be a key acting on a queue in a
+    state nobody can see.
+    """
+    if key in (curses.KEY_UP, ord("k")):
+        pos -= 1
+    elif key in (curses.KEY_DOWN, ord("j")):
+        pos += 1
+    elif key == curses.KEY_HOME:
+        pos = 0
+    elif key == curses.KEY_END:
+        pos = room
+    elif key in (curses.KEY_ENTER, 10, 13, ord("m")):
+        return max(0, min(pos, max(0, room))), "take"
+    elif key in (ord("q"), 27):
+        return max(0, min(pos, max(0, room))), "leave"
+    return max(0, min(pos, max(0, room))), ""
+
+
+def holding(
+    win,
+    paint: dict,
+    queue,
+    name: str,
+    pos: int,
+    top: int = 0,
+    flash: str = "",
+    phantom: tuple[dict, dict] | None = None,
+) -> tuple[int | None, int]:
+    """The listing with *name* in the air, until a key settles it.
+
+    Returns ``(the position taken, the line it was scrolled to)``, and ``None``
+    for the position when it was left alone.
+
+    **One loop for both things that are held.** ``m`` on the listing holds a
+    download that is in the queue; :func:`pick_place` holds a video that is not
+    in it yet. They are the same screen — the same title bar, the same two
+    arrows, the same cut line moving under the item as it goes — and they are
+    this function rather than two copies of it, because the reason to show
+    either of them is the line, and a line drawn twice is a line that can be
+    drawn two ways.
+
+    Nothing is renamed and nothing is written here. What is decided is a
+    position; :func:`do_reorder` and :func:`place` are what act on one.
+    """
+    # How many places there are to be in. Counted once, because nothing is
+    # re-read while an item is held: an item that is in the queue has its own
+    # place among the others, and one that is not — a phantom — has a place
+    # after the last of them.
+    room = len([row for row in queue.rows if row["where"] == "queued"]) - (
+        0 if phantom else 1
+    )
+    while True:
+        # Taken here and nowhere else while an item is held: the thread only
+        # ever fills a slot, and the facts the screen draws from are the ones
+        # this line assigned.
+        queue.tonight.collect()
+        queue.tonight.refresh()
+        top = draw_list(win, paint, queue, 0, top, flash, name, pos, phantom)
+        # A quarter of a second while a reading is in the air, so the header
+        # fills itself in when it lands rather than at the next keypress, and
+        # blocking otherwise. Never the second-long tick the listing uses to
+        # watch a download by: a redraw underneath a held item would be the
+        # queue rearranging itself around a decision that has not been taken.
+        win.timeout(250 if queue.tonight.pending else -1)
+        try:
+            key = win.getch()
+        finally:
+            win.timeout(-1)
+        if key == curses.KEY_MOUSE:
+            # A flick scrolls the held item, and only a keypress spends.
+            pos = max(0, min(pos + ytq.read_wheel(), max(0, room)))
+            continue
+        pos, settled = held_key(key, pos, room)
+        if settled == "take":
+            return pos, top
+        if settled == "leave":
+            return None, top
 
 
 def list_screen(
@@ -1579,9 +1745,10 @@ def list_screen(
     Two modes. Normally this screen picks — ↑↓ and enter — and the item screen
     acts, so there is no way to change the wrong download. The exception is
     moving one, which is the single action whose whole effect is *where it is
-    in this list*: it is picked up here, moved with the same two keys that were
-    already moving the cursor, and dropped. Nothing is renamed until it is
-    dropped, and everything else is locked out while it is in the air.
+    in this list*: it is picked up here, held by :func:`holding` — the same
+    loop ytq's picker is — moved with the two keys that were already moving the
+    cursor, and dropped. Nothing is renamed until it is dropped, and everything
+    else is locked out while it is in the air.
 
     This is also the whole queue's screen now. ``n`` runs it, ``s`` opens the
     settings and ``l`` the runner's log — the three keys the queue's own screen
@@ -1590,27 +1757,55 @@ def list_screen(
     them can change the answer.
     """
     top = 0
-    moving = start_moving
-    pos = 0
-    if moving:
-        queued = [row["name"] for row in queue.rows if row["where"] == "queued"]
-        pos = queued.index(moving) if moving in queued else 0
+    holds = start_moving
     while True:
+        if holds:
+            # Picked up: the listing goes on being drawn, by :func:`holding`,
+            # with everything but the two arrows locked out until it is put
+            # down. What comes back is a place, and nothing has been renamed to
+            # get it.
+            moving, holds = holds, ""
+            queued = [row["name"] for row in queue.rows if row["where"] == "queued"]
+            chosen, top = holding(
+                win,
+                paint,
+                queue,
+                moving,
+                queued.index(moving) if moving in queued else 0,
+                top,
+                flash,
+            )
+            if chosen is None:
+                flash = "left where it was"
+                continue
+            said, moved = do_reorder(queue.rows, moving, chosen)
+            if moved:
+                queue.receipts.append(said)
+            flash = said
+            queue.read()
+            if moved:
+                queue.tonight.start()
+            # A drop that moved something renamed it, so the cursor follows the
+            # POSITION it was dropped at (landed_index); one that did not still
+            # knows the name it kept.
+            found = (
+                landed_index(queue.rows, chosen) if moved else queue.index_of(moving)
+            )
+            cursor = cursor if found is None else found
+            continue
         cursor = max(0, min(cursor, len(queue.rows) - 1))
         # Taken here and nowhere else: the thread only ever fills a slot, and
         # the facts the screen draws from are the ones this line assigned.
         queue.tonight.collect()
         queue.tonight.refresh()
-        top = draw_list(win, paint, queue, cursor, top, flash, moving, pos)
+        top = draw_list(win, paint, queue, cursor, top, flash)
         # Blocking while nothing is moving, so an idle screen costs no wakeups
         # at all; a second is fast enough to watch a download by. A quarter of
         # one while a reading is in the air, so the header fills itself in when
-        # it lands rather than at the next keypress. Not otherwise while an
-        # item is being moved: a redraw underneath a move would be the queue
-        # rearranging itself around a decision that has not been taken.
+        # it lands rather than at the next keypress.
         if queue.tonight.pending:
             wait = 250
-        elif queue.moving() and not moving:
+        elif queue.moving():
             wait = 1000
         else:
             wait = -1
@@ -1619,40 +1814,6 @@ def list_screen(
             key = win.getch()
         finally:
             win.timeout(-1)
-
-        if moving:
-            room = len([row for row in queue.rows if row["where"] == "queued"]) - 1
-            if key in (curses.KEY_UP, ord("k")):
-                pos -= 1
-            elif key in (curses.KEY_DOWN, ord("j")):
-                pos += 1
-            elif key == curses.KEY_MOUSE:
-                pos += ytq.read_wheel()
-            elif key == curses.KEY_HOME:
-                pos = 0
-            elif key == curses.KEY_END:
-                pos = room
-            elif key in (curses.KEY_ENTER, 10, 13, ord("m")):
-                said, moved = do_reorder(queue.rows, moving, pos)
-                if moved:
-                    queue.receipts.append(said)
-                dropped, moving, flash = moving, "", said
-                queue.read()
-                if moved:
-                    queue.tonight.start()
-                # A drop that moved something renamed it, so the cursor
-                # follows the POSITION it was dropped at (landed_index); one
-                # that did not still knows the name it kept.
-                found = (
-                    landed_index(queue.rows, pos)
-                    if moved
-                    else queue.index_of(dropped)
-                )
-                cursor = cursor if found is None else found
-            elif key in (ord("q"), 27):
-                moving, flash = "", "left where it was"
-            pos = max(0, min(pos, max(0, room)))
-            continue
 
         if key == -1:
             # A download's figures are a second old at worst, and the row it is
@@ -1687,11 +1848,7 @@ def list_screen(
                 flash = queue.stop_mine()
         elif key == ord("m"):
             if queue.rows and queue.rows[cursor]["where"] == "queued":
-                moving = queue.rows[cursor]["name"]
-                pos = [
-                    row["name"] for row in queue.rows if row["where"] == "queued"
-                ].index(moving)
-                flash = ""
+                holds, flash = queue.rows[cursor]["name"], ""
             else:
                 flash = "only a queued download has a place in the order"
         elif key in (curses.KEY_UP, ord("k")):
@@ -1731,6 +1888,68 @@ def list_screen(
             # Every key that changes a download is on the download's own
             # screen, and pressing one here used to do nothing at all.
             flash = "⏎ opens it; its keys are there"
+
+
+# --------------------------------------------------------------------------- #
+# A place for something that is not queued yet
+# --------------------------------------------------------------------------- #
+
+
+def pick_place(
+    win, name: str, cap: int, partial: bool, pos: int | None = None
+) -> int | None:
+    """dlq's listing with *name* held: ↑↓ move it, ⏎ takes the place, esc leaves.
+
+    Returns the queued position chosen (0-based, among the queued items that
+    exist on disk — the same *pos* :func:`do_reorder` takes), or ``None`` when
+    it is left alone.
+
+    **ytq's door, and it is this screen and not a copy of it.** The video does
+    not exist yet: what is held is a phantom (:func:`phantom_of`), a row and a
+    plan entry that live for as long as the screen is open, so the cut line and
+    the shares are drawn with the new item counted in whatever place it is
+    being dragged to. Nothing here writes anything — an answer of ``None`` and
+    an answer of 3 leave exactly the same queue behind. Putting the file
+    somewhere is :func:`place`, afterwards, once ytq has written it.
+
+    *pos* is a place already chosen — somebody re-opening the picker to think
+    again. ``None`` starts it where the item would land if nobody said
+    otherwise, which is last: the number ytq is about to give it.
+
+    *win* is the caller's window, so this is drawn inside ytq's own curses
+    session and hands it back untouched when it returns.
+    """
+    curses.curs_set(0)
+    win.keypad(True)
+    # ytq's own switch, and the same rule: wheels only, so a tap on a screen
+    # that ends in a download cannot press a key.
+    ytq.enable_touch_scroll()
+    queue = Queue()
+    room = len([row for row in queue.rows if row["where"] == "queued"])
+    return holding(
+        win,
+        ink(win),
+        queue,
+        name,
+        room if pos is None else max(0, min(pos, room)),
+        phantom=phantom_of(name, cap, partial),
+    )[0]
+
+
+def place(name: str, pos: int) -> tuple[str, bool]:
+    """Put the queued item file *name* at position *pos*: ``(what to say, moved)``.
+
+    :func:`do_reorder` on a fresh read of the queue — **the one numbering
+    rule**, the same one ``m`` on the listing goes through, so a place taken
+    from ytq and a place taken here cannot be slotted or renumbered differently
+    and cannot disagree about whether the queue is too busy to be touched.
+
+    The read is fresh because the queue is not ytq's: the picker's listing was
+    drawn before the item was written, and a firing or another terminal may
+    have moved something since. *pos* is a position among the items that are
+    there **now**, which is what a position means everywhere else in this file.
+    """
+    return do_reorder(sched.items(), name, pos)
 
 
 # --------------------------------------------------------------------------- #
@@ -3585,6 +3804,130 @@ def _self_test() -> int:
                 [],
             )
 
+    # ------------------------------------------ a place for one not yet queued
+    # ytq's picker, which is this listing with a video that has not been
+    # written held on it. Two silent failures are what these are for. A phantom
+    # that draws twice, or that takes an index an existing row wanted, is a
+    # screen offering to move the wrong download — the same failure the widths
+    # above are checked for, arrived at from the one row the reader never
+    # produced. And a cut line worked out without the new item's cap is a
+    # screen promising a night that will not happen, which is the whole reason
+    # the picker is shown this listing rather than a list of names.
+    new_row, new_item = phantom_of("99-new-talk.py", 200 * 1024 * 1024, False)
+    check(
+        "a phantom is a queued download that has fetched nothing",
+        (new_row["where"], new_row["have"], new_row["files"], new_row["phantom"]),
+        ("queued", 0, [], True),
+    )
+    check("and states no total, so its cap reads as the bound", new_row["stated"], 0)
+    check(
+        "its plan entry is what a reading would have carried",
+        sorted(new_item),
+        ["cap", "name", "part_bytes", "partial", "slice_min"],
+    )
+    # Three 200 MiB downloads and a budget for two of them, and a fourth of the
+    # same size dragged to the front. It is admitted first, so the third of the
+    # ones already queued falls below the line: the new item did not get a
+    # place of its own, it took one.
+    with_new = {**trio_facts, "items": [*trio_facts["items"], new_item]}
+    front = preview([*whole_rows, new_row], new_row["name"], 0)
+    front_order = [row["name"] for row in front if row["where"] == "queued"]
+    check("held at the front it is first in the order", front_order[0], new_row["name"])
+    front_plan = tonight_plan(front_order, with_new)
+    front_cut, _ = cut_index(front_order, with_new, 40, front_plan)
+    check("the new one takes tonight's first place", front_cut, 2)
+    check(
+        "and pushes one that was above the line below it",
+        front_order[front_cut],
+        "20-two.py",
+    )
+    # The same phantom at the back gets nothing, and the line falls above it —
+    # the cut follows the item as it is dragged, which is the only thing on
+    # this screen that answers "where should this go".
+    back = preview([*whole_rows, new_row], new_row["name"], 3)
+    back_order = [row["name"] for row in back if row["where"] == "queued"]
+    back_plan = tonight_plan(back_order, with_new)
+    check(
+        "held last it gets nothing tonight",
+        [entry["bytes"] for entry in back_plan if entry["name"] == new_row["name"]],
+        [0],
+    )
+    check(
+        "so the line falls above it instead",
+        cut_index(back_order, with_new, 40, back_plan)[0],
+        2,
+    )
+    # And it is the phantom's own cap the line is drawn with: a small one at
+    # the front costs nobody their place.
+    small_row, small_item = phantom_of("99-clip.py", 40 * 1024 * 1024, False)
+    small_facts = {**trio_facts, "items": [*trio_facts["items"], small_item]}
+    small_order = [
+        row["name"]
+        for row in preview([*whole_rows, small_row], small_row["name"], 0)
+        if row["where"] == "queued"
+    ]
+    small_cut, _ = cut_index(small_order, small_facts, 40)
+    check("a small one at the front costs nobody their place", small_cut, 3)
+    check(
+        "and the two that were going still go",
+        [name for name in ("10-one.py", "20-two.py") if name in small_order[:small_cut]],
+        ["10-one.py", "20-two.py"],
+    )
+    for width in (32, 40, 80):
+        # The line is spelled for the width it is drawn at, exactly as
+        # :func:`draw_list` asks for it: one of them at 40 drawn on a 32-column
+        # phone is a rule hanging off the end of the screen.
+        reaches, ruled = cut_index(front_order, with_new, width, front_plan)
+        check(f"the line falls in the same place at {width}", reaches, front_cut)
+        drawn = compose_rows(front, width, "", (reaches, ruled), front_plan)
+        told = {index: " ".join(lines) for index, lines in drawn if index is not None}
+        check(
+            f"every download, the new one included, is drawn once at {width}",
+            sorted(told),
+            [0, 1, 2, 3],
+        )
+        check(
+            f"and the new one is on the screen exactly once at {width}",
+            sum("new-talk" in text for text in told.values()),
+            1,
+        )
+        check(
+            f"each row is the download it is the index of at {width}",
+            [
+                index
+                for index, name in enumerate(front_order)
+                if _slug_of(name) not in told[index]
+            ],
+            [],
+        )
+        for _, lines in drawn:
+            for line in lines:
+                at_most(f"a row of the picker's listing fits {width}", len(line), width - 1)
+    # The keys, at both ends of the one loop that holds a download: ``m`` on the
+    # listing and the picker are the same screen, and a picker answering ⏎
+    # differently would be two screens that look identical disagreeing about
+    # what enter means. "leave" is what :func:`pick_place` hands back as
+    # ``None``, and it is the only answer that leaves the queue alone — see the
+    # temporary queue below, where a held phantom writes nothing at all.
+    check("↑ moves a held download up one", held_key(curses.KEY_UP, 2, 4), (1, ""))
+    check("and k does the same", held_key(ord("k"), 2, 4), (1, ""))
+    check("↓ moves it down one", held_key(curses.KEY_DOWN, 2, 4), (3, ""))
+    check("the front is as far up as it goes", held_key(curses.KEY_UP, 0, 4), (0, ""))
+    check("and the last place as far down", held_key(curses.KEY_DOWN, 4, 4), (4, ""))
+    check("home takes it to the front", held_key(curses.KEY_HOME, 3, 4), (0, ""))
+    check("end takes it to the back", held_key(curses.KEY_END, 1, 4), (4, ""))
+    check("⏎ takes the place it is at", held_key(10, 2, 4), (2, "take"))
+    check("so does the m that picked it up", held_key(ord("m"), 2, 4), (2, "take"))
+    check("esc leaves it", held_key(27, 2, 4), (2, "leave"))
+    check("and so does q", held_key(ord("q"), 2, 4), (2, "leave"))
+    check("every other key does nothing at all", held_key(ord("z"), 2, 4), (2, ""))
+    check("and neither does a timeout", held_key(-1, 2, 4), (2, ""))
+    check(
+        "a queue with one place in it has nowhere to go",
+        held_key(curses.KEY_END, 0, 0),
+        (0, ""),
+    )
+
     # ------------------------------------------- it can never promise too much
     # The invariant the whole line rests on, checked the only way it is worth
     # checking: over every order the screen could be put in. Reordering changes
@@ -4596,6 +4939,27 @@ def _self_test() -> int:
             [_slug_of(before[1]), _slug_of(before[0])],
         )
         check("with nothing lost in the middle of it", len(queue_names()), len(before))
+
+        # ytq's two halves, on a queue that is really there. Holding a video
+        # that has not been written must leave the disk exactly as it was —
+        # this is a screen opened from a confirm nobody has said yes to yet —
+        # and taking a place must be the same move `m` makes, on a fresh read.
+        untouched = queue_names()
+        held, entry = phantom_of("99-new-talk.py", 10, False)
+        shown = preview([*sched.items(), held], held["name"], 0)
+        compose_rows(shown, 40, "", None, tonight_plan(
+            [row["name"] for row in shown], None
+        ))
+        check("a held phantom writes nothing at all", queue_names(), untouched)
+        check("and the queue never knew about it", (root / "queue" / entry["name"]).exists(), False)
+        last = queue_names()[-1]
+        wanted = _slug_of(last)
+        said, moved = place(last, 0)
+        check("ytq's place is the same move on a fresh read", moved, True)
+        check("and the file is where it was asked for", _slug_of(queue_names()[0]), wanted)
+        check("said in the same words the listing uses", said, f"{wanted} is 1st of {len(untouched)}")
+        check("with nothing else disturbed", sorted(_slug_of(n) for n in queue_names()),
+              sorted(_slug_of(n) for n in untouched))
 
     # -------------------------------------------------- forgetting a download
     with tree() as root:

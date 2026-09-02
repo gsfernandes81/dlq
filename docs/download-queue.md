@@ -357,6 +357,19 @@ type it any more. Underneath, dropping one usually renames a single file, and
 when two neighbours have no room between them the whole queue is quietly dealt
 fresh numbers instead.
 
+**ytq asks for a place on this same screen.** Queueing a video offers a key
+that opens this listing with the video held on it — the two tonight lines, the
+groups, the cut line, and the new video as a row of its own that can be moved
+with `↑↓` like any other. Nothing has been written at that point, so the row is
+a phantom: it exists while the screen is open and goes when it closes. What it
+is there for is the line — the night is projected with the new video counted in
+whatever place it is being dragged to, so you can see it take tonight's last
+place off something else, or fall below the line itself. `⏎` takes the place
+and `esc` leaves the video where it was going anyway, which is last. The place
+is taken afterwards, once ytq has written the item, by the same move `m` makes
+here — so a video put third is third for the same reason and with the same
+renumbering, and it refuses in the same words while the queue is busy.
+
 **Removing keeps what was paid for.** `d` takes the download off the list and
 leaves every byte where it is — the partial in `work/`, anything finished in
 `out/`. The confirm screen offers a second key that also deletes the partial,

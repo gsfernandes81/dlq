@@ -30,7 +30,13 @@ Decisions that travel with this code — each was arrived at the hard way:
   to. Every verb that lives at both ends is still **one function called by
   both** — `do_arm`, `do_cancel`, `set_dest`, `queue_run_argv` — because a
   screen and a command that disagree about whether arming worked leave
-  nobody able to tell.
+  nobody able to tell. It is also **ytq's screen**: `pick_place` is this
+  listing holding a phantom — a video not written yet, drawn and *planned*
+  through the same `preview`/`tonight_plan`/`cut_index`/`compose_rows` the
+  main screen uses (`holding` is the one held-item loop, `m` and the picker
+  both), so the cut line answers with the new item counted in the place it is
+  being dragged to; it writes nothing, and `place` takes the place afterwards
+  through `do_reorder`.
 - **`run-now` carries `--force`**, and that is what makes now mean now: it
   overrides the clock gate and nothing else — the floor, the per-item caps and
   the portal reading still decide everything they decided.
