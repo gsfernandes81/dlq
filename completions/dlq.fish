@@ -29,7 +29,7 @@ complete -c dlq -n __dlq_bare -a list     -d "every download, and how much of it
 complete -c dlq -n __dlq_bare -a ui       -d "change it: reorder, rename, remove, retry, download now"
 complete -c dlq -n __dlq_bare -a path     -d "where a finished download landed"
 complete -c dlq -n __dlq_bare -a dest     -d "show or set where finished downloads are put"
-complete -c dlq -n __dlq_bare -a settings -d "the window, the reserve and automatic downloads"
+complete -c dlq -n __dlq_bare -a settings -d "the window, the reserve, automatic downloads and what is said"
 complete -c dlq -n __dlq_bare -a queue    -d "just the queued item files"
 complete -c dlq -n __dlq_bare -a logs     -d "last 40 lines of the runner log"
 complete -c dlq -n __dlq_bare -a dump     -d "everything a bug report needs, in one paste"
@@ -94,7 +94,11 @@ complete -c dlq -n "__dlq_after settings; and test (count (commandline -opc)) -e
 complete -c dlq -n "__dlq_after settings; and test (count (commandline -opc)) -eq 2" \
     -a reserve-when-paid -d "keep it when paid data is there"
 complete -c dlq -n "__dlq_after settings; and test (count (commandline -opc)) -eq 2" \
+    -a paid-min -d "paid data needed to waive it (MB; 0 is any at all)"
+complete -c dlq -n "__dlq_after settings; and test (count (commandline -opc)) -eq 2" \
     -a auto -d "let the nightly job download"
+complete -c dlq -n "__dlq_after settings; and test (count (commandline -opc)) -eq 2" \
+    -a notify-blocked -d "say when a firing is blocked"
 complete -c dlq -n "__dlq_after settings; and test (count (commandline -opc)) -eq 3" \
     -a default -d "put the built-in default back"
 complete -c dlq -n "__dlq_setting auto" -a on -d "the nightly job downloads"
@@ -104,6 +108,10 @@ complete -c dlq -n "__dlq_setting reserve-when-paid" -a yes \
     -d "the reserve is kept even when paid data is there"
 complete -c dlq -n "__dlq_setting reserve-when-paid" -a no \
     -d "paid data waives the reserve"
+complete -c dlq -n "__dlq_setting notify-blocked" -a on \
+    -d "a firing stopped by a fault says so on the phone"
+complete -c dlq -n "__dlq_setting notify-blocked" -a off \
+    -d "a blocked firing is in the log only; a failed item still says so"
 
 complete -c dlq -n "__dlq_after run-now" -l yes \
     -d "do not ask before spending data"

@@ -1628,7 +1628,7 @@ def set_dest(kind: str, value: str) -> tuple[bool, list[str]]:
     A ``config.json`` that will not parse stops it before anything is written:
     :func:`expire_runner.load_config` answers one with an empty dict, so a
     save on top of it would be a fresh file holding this destination alone,
-    with the other two and the four settings gone under a success line.
+    with the other two and every setting gone under a success line.
     """
     runner = _runner()
     broken = runner.config_problem()
@@ -1669,9 +1669,16 @@ def set_dest(kind: str, value: str) -> tuple[bool, list[str]]:
 # --------------------------------------------------------------------------- #
 
 #: What each setting *does*, in the words a change to it is reported in. The
-#: two switches carry both halves, because a switch reads as two different
+#: switches carry both halves, because a switch reads as two different
 #: sentences rather than as one with a word swapped: "the reserve is kept" and
 #: "paid data waives it" are two facts, not one stated twice.
+#:
+#: ``paid-min`` carries both halves for the same reason, though it is a figure
+#: rather than a switch: nought is not "no MB", it is the rule the waiver had
+#: before there was a figure — any paid data at all — and a line reading
+#: "0 MB is needed" would be saying the opposite of what it does. Both halves
+#: name ``reserve-when-paid``, because that is the setting this one qualifies
+#: and a figure that does nothing on its own has to say whose figure it is.
 #:
 #: Keyed by :data:`expire_runner.SETTINGS`, and the self-test pins that it
 #: still is — a setting added to the runner with nothing said about it here
@@ -1684,19 +1691,29 @@ SETTING_SAYS: dict[str, object] = {
         "the reserve is kept even when paid data is there",
         "paid data waives the reserve",
     ),
+    "paid-min": (
+        "reserve-when-paid no waives the reserve only with at least that much "
+        "paid data",
+        "reserve-when-paid no waives the reserve on any paid data at all",
+    ),
     "auto": (
         "the nightly job downloads when the window opens",
         "the nightly job fires and does nothing; run-now still works",
+    ),
+    "notify-blocked": (
+        "a firing stopped by a fault says so on the phone",
+        "a blocked firing is in the log only; a failed item still says so",
     ),
 }
 
 
 def _setting_names() -> str:
-    """``window, reserve, reserve-when-paid or auto`` — the four, in one line.
+    """``window, reserve, ... or notify-blocked`` — all of them, in one line.
 
-    Said the same way wherever the four are offered, because a refusal that
-    lists them differently from the screen that lists them reads as two
-    different sets of four.
+    Said the same way wherever they are offered, because a refusal that lists
+    them differently from the screen that lists them reads as two different
+    sets of settings. Read out of the runner in its order, so a setting added
+    there is offered here without being named here as well.
     """
     names = list(_runner().SETTINGS)
     return ", ".join(names[:-1]) + f" or {names[-1]}"
@@ -1712,15 +1729,16 @@ def _setting_said(name: str, value: object) -> str:
 
 
 def show_settings(argv: list[str]) -> int:
-    """Show or set the four things a person may change about the spending.
+    """Show or set the handful of things a person may change about the spending.
 
     How early the queue may start, what may never be spent, whether that
-    reserve still stands when there is paid data behind it, and whether the
-    nightly job downloads at all. They belong to :mod:`expire_runner`, which
-    is where the spec, the parsing and the spelling live: the screen, this
-    command and the firing itself all read them from there, so none of the
-    three can hold its own opinion about what ``2h`` means or about which
-    stored value is nonsense.
+    reserve still stands when there is paid data behind it and how much of it
+    there has to be, whether the nightly job downloads at all, and whether a
+    firing it stopped says so on the phone. They belong to
+    :mod:`expire_runner`, which is where the spec, the parsing and the spelling
+    live: the screen, this command and the firing itself all read them from
+    there, so none of the three can hold its own opinion about what ``2h``
+    means or about which stored value is nonsense.
 
     Laid out the way ``dlq dest`` is — the name as a heading with its facts
     indented under it — for the same reason: on a phone the value and the note
@@ -1738,14 +1756,14 @@ def show_settings(argv: list[str]) -> int:
             for line in _wrap(text, width - 2):
                 print(f"  {paint(line, tone)}")
 
-        # The file's own fault first and once, because it is the reason all
-        # four below read as their defaults and because nothing can be changed
-        # until it is fixed — four settings saying "default" with nothing
-        # explaining it is the version of this that gets the file rewritten.
+        # The file's own fault first and once, because it is the reason every
+        # setting below reads as its default and because nothing can be changed
+        # until it is fixed — a list saying "default" all the way down with
+        # nothing explaining it is the version of this that gets it rewritten.
         broken = runner.config_problem()
         if broken:
             note(f"✗ {broken}", "31")
-            note("the four below are the built-in ones; nothing can be set", "90")
+            note("those below are the built-in ones; nothing can be set", "90")
             print()
 
         for number, (name, spec) in enumerate(runner.SETTINGS.items()):
@@ -1827,7 +1845,7 @@ def set_setting(name: str, text: str) -> tuple[bool, list[str]]:
         return False, [f"{name!r} is not a setting; try {_setting_names()}"]
     # Before anything else, and before the value is even read: what is on the
     # disk cannot be added to if it cannot be parsed, and saving anyway would
-    # replace the destinations and the other three settings with this one.
+    # replace the destinations and every other setting with this one.
     broken = runner.config_problem()
     if broken:
         return False, [broken]
@@ -3313,7 +3331,9 @@ def _checks() -> int:
                     "window": ("45m", 45),
                     "reserve": ("150MB", 150),
                     "reserve-when-paid": ("no", False),
+                    "paid-min": ("150MB", 150),
                     "auto": ("off", False),
+                    "notify-blocked": ("off", False),
                 }
                 check(
                     "and every setting has a value typed at it here",
@@ -3371,6 +3391,37 @@ def _checks() -> int:
                         runner.settings()[name],
                         runner.SETTINGS[name]["default"],
                     )
+                # The one figure whose sentence turns over with the figure:
+                # nought is not "no MB of paid data", it is the rule the
+                # waiver had before there was a figure — any paid data at all
+                # — and a line reading "0 MB is needed" would say the opposite
+                # of what the runner then does. Both halves name the setting
+                # they qualify, because on its own this one changes nothing.
+                _, said_lines = set_setting("paid-min", "150")
+                check(
+                    "a paid figure says how much is wanted",
+                    ("150 MB" in said_lines[-1], "at least" in said_lines[-1]),
+                    (True, True),
+                )
+                check(
+                    "and whose waiver it is",
+                    "reserve-when-paid" in said_lines[-1],
+                    True,
+                )
+                _, said_lines = set_setting("paid-min", "0")
+                check(
+                    "nought is any paid data at all, not none of it",
+                    ("0 MB" in said_lines[-1], "any paid data" in said_lines[-1]),
+                    (True, True),
+                )
+                _, said_lines = set_setting("notify-blocked", "off")
+                check(
+                    "silencing a blocked firing keeps the log line",
+                    "log" in said_lines[-1],
+                    True,
+                )
+                set_setting("notify-blocked", "default")
+                set_setting("paid-min", "default")
                 check(
                     "a setting nobody has is refused, not created",
                     set_setting("speed", "9")[0],
@@ -3658,7 +3709,7 @@ def dump(target: str | None = None) -> int:
         values = runner.settings()
         print(f"  {'config.json':<18}: {runner.CONFIG_FILE}")
         # The whole file being unreadable outranks anything said about one
-        # setting: it is why all four read "default" below, and it is why the
+        # setting: it is why every one below reads "default", and it is why the
         # person filing the report could not change any of them.
         broken = runner.config_problem()
         if broken:

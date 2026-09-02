@@ -14,7 +14,8 @@ Guarantees, in the order they matter
    measures exactly, and re-checked live while a download runs — not merely
    predicted before it starts. The one thing that lifts it is being told to:
    ``settings reserve-when-paid no`` waives it for as long as the reading says
-   paid data is there, which is data the reserve was never protecting.
+   paid data is there — at least ``settings paid-min`` of it, if a figure has
+   been put on it — which is data the reserve was never protecting.
 2. **Nothing runs past 00:00 UTC.** Enforced by a ``timeout`` wrapper decided at
    spawn, so it holds even if this runner is killed, plus a reaper on the next
    firing for anything that escapes.
@@ -72,7 +73,7 @@ Usage::
 
 Checking it
 -----------
-``python3 expire_runner.py --self-test`` runs 142 offline checks. It takes
+``python3 expire_runner.py --self-test`` runs 166 offline checks. It takes
 neither the lock nor the heartbeat, so it is safe to run while a firing is live.
 
 Two parts are worth not weakening. The **timezone sweep**: the checks pin the
@@ -277,7 +278,7 @@ def config_problem() -> str | None:
     destinations and settings that were in there are gone with a success line
     printed over them. So everything that sets asks this first and refuses,
     and the two screens and the dump say the same line rather than showing
-    four settings reading "default" for a reason nothing states.
+    every setting reading "default" for a reason nothing states.
 
     A file that is not there is not a problem: nothing has been set yet, and
     that is what an empty config means everywhere else here. Neither is an
@@ -315,7 +316,7 @@ def save_config(config: dict) -> None:
 # --------------------------------------------------------------------------- #
 
 
-#: The four things a person may change about how the queue spends, in the order
+#: The six things a person may change about how the queue spends, in the order
 #: both front ends list them — so a screen and a command cannot disagree about
 #: what there is to change. They live in the same ``config.json`` the
 #: destinations do, and like the destinations they are read at the moment they
@@ -332,9 +333,20 @@ def save_config(config: dict) -> None:
 #: multiple of 15 minutes because a firing is a JobScheduler job that lands
 #: about that often, so a window that is not a multiple of one buys nothing.
 #:
-#: The two switches are spelled in their own words rather than in one shared
-#: pair, because that is how each reads out loud: a reserve is kept or it is
-#: not, automatic downloads are on or they are off.
+#: ``paid-min`` is how much paid data has to be on the account before that
+#: waiver applies. Zero — the default — is the rule the waiver had before there
+#: was a figure to put on it at all: any paid data whatsoever. A figure above
+#: zero is for the account whose last few MB of paid data are not worth the
+#: reserve they would stand down.
+#:
+#: ``notify-blocked`` is whether a firing stopped by a fault says so on the
+#: phone. That one notification only: an item that failed its last night goes
+#: on notifying either way, because nothing else is ever going to mention it.
+#:
+#: The switches are spelled in their own words rather than in one shared pair,
+#: because that is how each reads out loud: a reserve is kept or it is not,
+#: automatic downloads are on or they are off, a blocked firing is announced or
+#: it is not.
 SETTINGS: dict[str, dict] = {
     "window": {
         "key": "window_minutes",
@@ -363,12 +375,29 @@ SETTINGS: dict[str, dict] = {
         "words": ("yes", "no"),
         "label": "keep it when paid data is there",
     },
+    "paid-min": {
+        "key": "paid_min_mb",
+        "default": 0,
+        "kind": "mb",
+        "words": None,
+        "label": "paid data needed to waive it",
+        "min": 0,
+        "max": 100_000,
+        "step": 1,
+    },
     "auto": {
         "key": "auto",
         "default": True,
         "kind": "bool",
         "words": ("on", "off"),
         "label": "let the nightly job download",
+    },
+    "notify-blocked": {
+        "key": "notify_blocked",
+        "default": True,
+        "kind": "bool",
+        "words": ("on", "off"),
+        "label": "say when a firing is blocked",
     },
 }
 
@@ -423,7 +452,7 @@ def setting_state(name: str) -> tuple[object, str | None, str]:
     A ``config.json`` that will not parse holds nothing anything can read, so
     every setting reads "default" here with nothing to say about it;
     :func:`config_problem` is the line that says why, printed once by each
-    front end rather than four times over.
+    front end rather than once per setting.
     """
     spec = SETTINGS[name]
     config = load_config()
@@ -525,20 +554,27 @@ def reserve_waived(doc: dict | None) -> bool:
     """Whether *doc* is a reading the reserve stands aside for.
 
     Only with ``reserve-when-paid`` set to no **and** the portal saying there
-    is paid data left. Both halves matter: the setting alone waives nothing, or
-    the floor would be gone on the nights it is the only thing left; and paid
-    data alone waives nothing either, since keeping the reserve against it is
-    the default and the whole point of the reserve for most people.
+    is at least ``paid-min`` of paid data left. Both halves matter: the setting
+    alone waives nothing, or the floor would be gone on the nights it is the
+    only thing left; and paid data alone waives nothing either, since keeping
+    the reserve against it is the default and the whole point of the reserve
+    for most people.
 
     Asked of the reading in hand rather than of the night, because paid data
     appears and goes while a download runs — a credit bought at 23:50 waives
     the reserve from the next poll, and the poll after it says so again.
     """
-    if settings()["reserve-when-paid"] or not doc:
+    values = settings()
+    if values["reserve-when-paid"] or not doc:
         return False
+    # ``paid-min`` at zero is the rule the waiver had before there was a figure
+    # to put on it: any paid data at all. A byte is "at all", so the threshold
+    # never falls below one — a threshold of zero would waive the reserve on a
+    # reading that says there is no paid data, which is the opposite of asked.
+    threshold = max(1, int(values["paid-min"]) * 1_000_000)
     # A reading with no paid figure at all is not a reading that says there is
     # paid data; it is one that has not said. Nothing is waived on a maybe.
-    return int((doc.get("paid") or {}).get("left_bytes") or 0) > 0
+    return int((doc.get("paid") or {}).get("left_bytes") or 0) >= threshold
 
 
 def floor_bytes(doc: dict | None) -> int:
@@ -561,6 +597,19 @@ def auto_enabled() -> bool:
     on deciding everything they decided.
     """
     return bool(settings()["auto"])
+
+
+def notify_blocked_enabled() -> bool:
+    """Whether a firing stopped by a fault is announced on the phone.
+
+    Read at the moment the notification would be posted, like every other
+    setting, and covering that notification alone: a malformed item and an
+    item that has run out of nights go on notifying with this off, because
+    nothing else is going to say so and neither of them repeats nightly. This
+    one does — a phone that cannot see the portal says it every ~15 minutes —
+    which is the whole reason there is a switch on it.
+    """
+    return bool(settings()["notify-blocked"])
 
 
 # --------------------------------------------------------------------------- #
@@ -1413,6 +1462,21 @@ def notify(title: str, content: str) -> None:
         )
 
 
+def say_blocked() -> None:
+    """Tell someone a firing was stopped by a fault, unless told not to.
+
+    The one notification a setting can turn off, so the setting is asked in
+    one place rather than at the call. Off leaves the log line exactly as it
+    was: what goes quiet is the phone, never the record of why.
+    """
+    if not notify_blocked_enabled():
+        return
+    notify(
+        "Download queue blocked",
+        "the runner could not proceed; see expire/logs/runner.log",
+    )
+
+
 # --------------------------------------------------------------------------- #
 # The firing
 # --------------------------------------------------------------------------- #
@@ -1978,8 +2042,8 @@ def _checks() -> int:
     check("next_reset stays timezone-aware", reset.tzinfo is not None, True)
     check("and lands on midnight", (reset.hour, reset.minute, reset.second), (0, 0, 0))
 
-    # The settings. Four figures a person may change, read out of config.json
-    # every time they are used rather than captured at import — the screen sets
+    # The settings. Everything a person may change, read out of config.json
+    # every time it is used rather than captured at import — the screen sets
     # them while a firing is in flight. What is pinned here is that a value
     # nobody can honour is *the default*, never an error and never half of one:
     # this is read at the top of a firing nobody is watching, and a stray
@@ -1988,7 +2052,9 @@ def _checks() -> int:
     check("the window is an hour by default", window_seconds(), 3600)
     check("the reserve is 100 MB", reserve_bytes(), 100_000_000)
     check("which paid data does not waive", settings()["reserve-when-paid"], True)
-    check("and the nightly job downloads", auto_enabled(), True)
+    check("and no figure is put on that paid data", settings()["paid-min"], 0)
+    check("the nightly job downloads", auto_enabled(), True)
+    check("and a blocked firing says so", notify_blocked_enabled(), True)
     check(
         "every setting has a value",
         set(settings()) == set(SETTINGS),
@@ -2000,12 +2066,16 @@ def _checks() -> int:
             "window_minutes": 120,
             "reserve_mb": 250,
             "reserve_when_paid": False,
+            "paid_min_mb": 150,
             "auto": False,
+            "notify_blocked": False,
         }
     )
     check("a window that is set is honoured", window_seconds(), 7200)
     check("so is a reserve", reserve_bytes(), 250_000_000)
+    check("so is the paid data a waiver wants", settings()["paid-min"], 150)
     check("and the switch", auto_enabled(), False)
+    check("and the one on the notification", notify_blocked_enabled(), False)
 
     # Each of these is a plausible thing to type into the file by hand: a round
     # number that is not a step, a word where a number goes, a negative, and a
@@ -2014,14 +2084,18 @@ def _checks() -> int:
         {
             "window_minutes": 100,
             "reserve_mb": -1,
+            "paid_min_mb": -5,
             "auto": "maybe",
             "reserve_when_paid": "sometimes",
+            "notify_blocked": "quietly",
         }
     )
     check("a window off the 15-minute step falls back", window_seconds(), 3600)
     check("a negative reserve falls back", reserve_bytes(), 100_000_000)
+    check("so does a negative paid figure", settings()["paid-min"], 0)
     check("a switch that is not one falls back", auto_enabled(), True)
-    check("and so does the other", settings()["reserve-when-paid"], True)
+    check("and so does the next", settings()["reserve-when-paid"], True)
+    check("and so does the last", notify_blocked_enabled(), True)
     save_config({"window_minutes": "abc"})
     check("a window that is not a number falls back", window_seconds(), 3600)
     check(
@@ -2104,8 +2178,10 @@ def _checks() -> int:
     check("so is one with the unit on it", parse_setting("window", "45m"), 45)
     check("and h is hours", parse_setting("window", "2h"), 120)
     check("MB is optional on the reserve", parse_setting("reserve", "150MB"), 150)
+    check("and on the paid figure", parse_setting("paid-min", "150"), 150)
     check("a switch takes off", parse_setting("auto", "off"), False)
     check("and yes in any case", parse_setting("reserve-when-paid", "YES"), True)
+    check("and on for the notification", parse_setting("notify-blocked", "on"), True)
 
     def _refused(name: str, text: str) -> bool:
         """Whether *text* is turned away, which is the only thing checked here.
@@ -2136,6 +2212,8 @@ def _checks() -> int:
     check("the reserve in MB", spell_setting("reserve", 100), "100 MB")
     check("a switch in its own words", spell_setting("auto", False), "off")
     check("which are not the other's", spell_setting("reserve-when-paid", True), "yes")
+    check("no paid figure is still a figure", spell_setting("paid-min", 0), "0 MB")
+    check("the notification is on or off", spell_setting("notify-blocked", True), "on")
 
     # The waiver. Both halves have to be true, and the reading is what says so:
     # paid data bought at 23:50 waives the reserve from the next poll, and the
@@ -2155,6 +2233,56 @@ def _checks() -> int:
     check("and not on a reading there is none of", floor_bytes(None), 100_000_000)
     check("what was set is still what was set", reserve_bytes(), 100_000_000)
     check("and the screen can say which night it is", reserve_waived(has_paid), True)
+
+    # How much paid data counts as paid data. The figure defaults to zero,
+    # which is the rule the waiver had before there was one — any paid data at
+    # all — so the boundary that matters at zero is a single byte against none
+    # at all. Above zero the threshold is the person's own, and the reading it
+    # is measured against understates what is paid for, so wanting "at least
+    # this much" can only ever keep the reserve for longer than it had to.
+    one_byte = {"paid": {"left_bytes": 1}}
+    check("a byte of paid data is paid data", reserve_waived(one_byte), True)
+    check("and none of it is not", reserve_waived(no_paid), False)
+    save_config({"reserve_when_paid": False, "paid_min_mb": 150})
+    just_under = {"paid": {"left_bytes": 149_999_999}}
+    exactly = {"paid": {"left_bytes": 150_000_000}}
+    check("a byte under the figure waives nothing", reserve_waived(just_under), False)
+    check("and the floor is the whole reserve", floor_bytes(just_under), 100_000_000)
+    check("the figure itself waives", reserve_waived(exactly), True)
+    check("and that is worth the reserve", floor_bytes(exactly), 0)
+    check("a byte of paid data no longer does", reserve_waived(one_byte), False)
+    # The figure is the second half of a switch, never a switch of its own: on
+    # the default setting the reserve stands over any amount of paid data.
+    save_config({"paid_min_mb": 150})
+    check("with the reserve kept, nothing waives it", reserve_waived(exactly), False)
+    check("however much paid data there is", reserve_waived(has_paid), False)
+    save_config({"paid_min_mb": 0})
+    check("nor with no figure on it either", reserve_waived(has_paid), False)
+
+    # The notification a firing blocked by a fault posts, and the one setting
+    # that silences it. Checked at say_blocked rather than through main(),
+    # which would take the lock off a phone that may be downloading.
+    posted: list[tuple[str, str]] = []
+    said_notify = globals()["notify"]
+    globals()["notify"] = lambda title, content: posted.append((title, content))
+    try:
+        save_config({})
+        say_blocked()
+        check("a blocked firing says so by default", len(posted), 1)
+        check("and says which queue it is", posted[0][0], "Download queue blocked")
+        save_config({"notify_blocked": False})
+        say_blocked()
+        check("and says nothing at all when told not to", len(posted), 1)
+        # The switch is on this one notification and not on notifying: an
+        # item that has run out of nights, a malformed item and a folder that
+        # cannot be reached all call notify() themselves, they each happen
+        # once, and nothing else is ever going to mention them.
+        notify("Download queue: item failed", "40-selftest.py failed 3 nights")
+        check("while every other notification goes on being posted", len(posted), 2)
+    finally:
+        globals()["notify"] = said_notify
+    # Back to the waiver's own config for what follows it.
+    save_config({"reserve_when_paid": False})
 
     # And what the waiver is worth, which is exactly the reserve and not a
     # penny more: the projection margin is error, not money, and stays.
@@ -2627,11 +2755,9 @@ def main(argv: list[str] | None = None) -> int:
         if code:
             # Worth telling someone: the window closes at 00:00 UTC and a human
             # may be able to do something about it. The job stays armed either
-            # way and tries again in ~15 minutes.
-            notify(
-                "Download queue blocked",
-                "the runner could not proceed; see expire/logs/runner.log",
-            )
+            # way and tries again in ~15 minutes — which is also why it is the
+            # one notification ``settings notify-blocked off`` can silence.
+            say_blocked()
         return code
     except KeyboardInterrupt:
         # The way a blind run is stopped, since nothing else will stop it. The

@@ -4,8 +4,8 @@ The data plan grants ~763 MiB of free data a day, and whatever is unused is
 wiped at 00:00 UTC. In the window before that reset — an hour by default —
 a scheduled job spends the leftover on downloads you queued — always leaving
 a floor for the morning (100 MB by default) and never touching the paid
-reserve. `dlq settings` changes the window, the floor, or turns the job off
-outright — see [Settings](#settings).
+reserve. `dlq settings` changes the window, the floor, what the job says, or
+turns it off outright — see [Settings](#settings).
 
 The queue lives in `~/dlq/` — this checkout — and its YouTube front end in a
 sibling checkout, `~/ytq/`. Two commands are installable (see
@@ -518,31 +518,37 @@ It is never half-written into a place it cannot go.
 ## Settings
 
 ```
-dlq settings                        # show all four, and what they are set to
+dlq settings                        # show them all, and what they are set to
 dlq settings window 45              # start downloads 45 min before the reset
 dlq settings window 2h              # ...or say it in hours
 dlq settings reserve 150            # keep 150 MB back instead of 100
 dlq settings reserve-when-paid no   # waive the reserve when paid data is there
+dlq settings paid-min 150           # ...but only with 150 MB of it left
 dlq settings auto off               # the nightly job fires and does nothing
+dlq settings notify-blocked off     # a blocked firing goes to the log only
 dlq settings window default         # put the built-in default back
 ```
 
 Or `s` on [the queue screen](#the-queue-itself) (itself reached with `s` from
-the item list), which shows the same four and takes the same changes: the two
-switches toggle where they sit, and the two numbers open a field, prefilled
+the item list), which shows the same six and takes the same changes: the
+switches toggle where they sit, and the numbers open a field, prefilled
 with what they are now — type `default` to put the built-in one back, same as
-on the command line.
+on the command line. Each setting's key is beside its name (`w r p m a n`); on
+a short phone the screen keeps every name, value and complaint and drops the
+grey line saying what each one means.
 
 | setting              | default | what it does                                     |
 |----------------------|---------|---------------------------------------------------|
 | `window`             | 60 min  | how long before the 00:00Z reset downloads may start — a multiple of 15 minutes, 15 to 1440 |
 | `reserve`            | 100 MB  | data kept back and never spent                     |
 | `reserve-when-paid`  | yes     | keep the reserve even when paid data is on the account; `no` waives it |
+| `paid-min`           | 0 MB    | how much paid data `reserve-when-paid no` wants before it waives; 0 is any paid data at all |
 | `auto`               | on      | let the nightly job actually download              |
+| `notify-blocked`     | on      | a firing stopped by a fault says so on the phone   |
 
 A value typed as `45`, `45m` or `2h` sets the window; `150` or `150MB` sets
-the reserve; `on`, `off`, `yes`, `no`, `true`, `false`, `1` and `0` all work
-for the two switches, case-insensitively. A value hand-edited into
+the reserve and `paid-min`; `on`, `off`, `yes`, `no`, `true`, `false`, `1` and
+`0` all work for the switches, case-insensitively. A value hand-edited into
 `config.json` that does not fit the rule — a window that is not a multiple of
 15, a negative reserve — is never applied: the setting reads as its default
 instead, and `dlq settings` and `dlq dump` both say which stored value they
@@ -572,6 +578,19 @@ back for whatever is left to download. Left at the default, `yes`, the reserve
 is kept regardless of what is paid for, which is the point of having one for
 most people.
 
+**`paid-min` is how much paid data that waiver wants to see**, and it does
+nothing at all while `reserve-when-paid` is `yes` — it qualifies that setting
+rather than standing on its own. Left at `0`, the default, the waiver means
+what it has always meant: any paid data at all, down to the last byte the
+portal reports. Set it to `150` and the reserve is only waived on a reading
+with at least 150 MB of paid data behind it — for the account whose last few
+MB of paid data are worth less than the reserve they would stand down. It is
+measured against `paid.left_bytes`, which can only understate what is actually
+paid for, so asking for "at least this much" errs towards keeping the reserve
+rather than towards spending it. The threshold is checked on each reading,
+like the waiver itself: paid data falling below it partway through a night
+brings the reserve back for whatever is left to download.
+
 **`auto off` stops the nightly job from downloading; it does not stop the job
 from running.** The job stays armed and keeps firing every ~15 minutes; each
 firing does nothing, and `dlq status` leads with **automatic downloads are
@@ -581,6 +600,17 @@ the clock: a person asking for a download now is not the schedule, and the
 switch is only ever a schedule. Nothing about money moves with it — the
 reserve, the per-item caps and the portal reading go on deciding exactly what
 they decided with the switch on.
+
+**`notify-blocked off` silences one notification and no others.** With it on,
+a firing stopped by a fault — the portal not answering, or its reading being
+too old to spend against — posts **Download queue blocked** to the phone. That
+is the one that repeats: a firing lands every ~15 minutes, so a phone away
+from the vessel's wifi says it all evening, which is the fastest way to teach
+anyone to ignore the notification that matters. Turned off, the runner still
+logs why it stopped and `dlq status` still leads with it; only the phone goes
+quiet. An item that has run out of nights, a malformed item and a download
+folder that cannot be reached go on notifying either way — each happens once,
+and nothing else is ever going to mention them.
 
 ## Downloading something now
 

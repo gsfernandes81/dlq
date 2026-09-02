@@ -99,8 +99,11 @@ HINTS = {
     "dest": "v video  a audio  f files  q back",
     # Every setting's key is named here rather than only on the screen: these
     # are the keys that spend or stop spending, and a key that is only
-    # discoverable by pressing it is not one to leave to a guess.
-    "settings": "w window  r reserve  p paid  a auto  q",
+    # discoverable by pressing it is not one to leave to a guess. The names
+    # went when the sixth setting arrived — six names do not fit a phone — and
+    # the letters stayed, because the screen carries each name beside its own
+    # letter and this line is the only place the set of them is stated.
+    "settings": "w r p m a n  each a setting   q back",
     "confirm": "y do it   any other key: no",
     # With a second answer offered, the hint has to admit it exists: "any other
     # key: no" over a screen showing a b is a screen contradicting itself.
@@ -116,10 +119,10 @@ TIGHT_HINTS = {
     "queue": "↑↓  a key  q back",
     "queue-live": "x stop  a key  q back",
     "dest": "v vid  a aud  f file  q back",
-    # No room for four names and the way out, so the names go: the screen
-    # itself carries each letter beside the setting it sets, and "q back" is
-    # the one thing on this line that must survive the narrow phone.
-    "settings": "press w r p a  q back",
+    # The same letters, and "q back" is the one thing on this line that must
+    # survive the narrow phone: the screen itself carries each letter beside
+    # the setting it sets.
+    "settings": "press w r p m a n  q back",
     "confirm": "y do it  else no",
     "confirm-two": "a key above  else no",
     "log": "↑↓ scroll  q back",
@@ -2080,8 +2083,11 @@ def dest_screen(win, paint: dict) -> tuple[str, bool]:
 #: arrangement :data:`DEST_KEYS` is in for the same reason: a setting added to
 #: the runner and not here would go unreachable rather than raise, since a
 #: short zip is not an error. ``p`` is the reserve-when-*p*aid switch, whose
-#: name is too long to take its own initial twice over.
-SETTING_KEYS = (ord("w"), ord("r"), ord("p"), ord("a"))
+#: name is too long to take its own initial twice over; ``m`` is the *m*inimum
+#: of paid data that switch wants, sitting next to it as it does in the list;
+#: ``n`` is the *n*otification. None of them is ``q`` or ``x``, which are the
+#: way out and the way to stop a download everywhere else in the queue.
+SETTING_KEYS = (ord("w"), ord("r"), ord("p"), ord("m"), ord("a"), ord("n"))
 
 
 def settings_lines(width: int) -> list[tuple[int, str, str]]:
@@ -2117,7 +2123,7 @@ def settings_lines(width: int) -> list[tuple[int, str, str]]:
             lines.append((0, "", ""))
         stored, problem, note = runner.setting_state(name)
         # The value is on the name's line rather than under it, which is what
-        # keeps four settings on a phone: they are two or three words each,
+        # keeps six settings on a phone: they are two or three words each,
         # unlike the destinations' paths, and the four lines a block would
         # otherwise take put the last setting off the bottom of the screen.
         head = f"{chr(letter)}  {name}  {runner.spell_setting(name, values[name])}"
@@ -2138,8 +2144,36 @@ def settings_lines(width: int) -> list[tuple[int, str, str]]:
     return lines
 
 
+def settings_body(width: int, height: int) -> list[tuple[int, str, str]]:
+    """:func:`settings_lines` cut down to what a screen this tall can show.
+
+    The screen's own rule, kept out here so it is checked rather than trusted:
+    the failure it exists for is a setting scrolling off the bottom, which is a
+    setting nobody knows is there — and the last of them, ``notify-blocked``,
+    sits under ``auto``, which is the one that stops the queue downloading at
+    all.
+
+    Two things are given up, in this order. The blank lines between the blocks
+    go first, because they cost nothing but air. If it still does not fit —
+    which is a 20-row phone at 32 columns, where six settings' meanings wrap to
+    two lines each — the grey line under each setting goes too, and what is
+    left is every setting's key, name and value, plus anything red. That is the
+    trade this screen makes: the word behind a value ("set" or "default") and
+    what the setting means are worth giving up, since the meaning is in the
+    docs and on the wide screen; a figure the phone is going to spend by, and a
+    value ``config.json`` holds that is being ignored, are not.
+    """
+    body = settings_lines(width)
+    room = height - 6
+    if len(body) > room:
+        body = [line for line in body if line[1]]
+    if len(body) > room:
+        body = [line for line in body if line[2] != "90"]
+    return body
+
+
 def settings_screen(win, paint: dict) -> tuple[str, bool]:
-    """What the queue may spend and how early — the four things that change it.
+    """What the queue may spend and how early — the settings that change it.
 
     :func:`dest_screen`'s shape, over the settings rather than the
     destinations, and deciding exactly as little: every value goes through
@@ -2147,9 +2181,9 @@ def settings_screen(win, paint: dict) -> tuple[str, bool]:
     settings`` sets through, so a screen and a command cannot disagree about
     whether a value was taken.
 
-    The two switches flip where they stand — there is nothing to type, and a
+    The switches flip where they stand — there is nothing to type, and a
     prompt asking for the word "off" over a screen already showing "on" is a
-    step for nothing. The two numbers open a field with the current number in
+    step for nothing. The numbers open a field with the current number in
     it: the unit is the setting's, not something anyone should have to spell,
     and the note says so along with the way to put the built-in one back,
     which is the word ``default`` typed into the same field.
@@ -2166,13 +2200,7 @@ def settings_screen(win, paint: dict) -> tuple[str, bool]:
         height, width = win.getmaxyx()
         _bar(win, paint, " settings ")
         line = 2
-        body = settings_lines(width)
-        # The blank lines between the blocks are the first thing given up on a
-        # short screen: a setting that scrolled off the bottom is a setting
-        # nobody knows is there, and `auto` — the one that stops the queue
-        # downloading at all — is the last of the four.
-        if len(body) > height - 6:
-            body = [line_ for line_ in body if line_[1]]
+        body = settings_body(width, height)
         for indent, text, tone in body:
             if line >= height - 4:
                 break
@@ -2793,18 +2821,41 @@ def _self_test() -> int:
                 True,
             )
             # A setting scrolling off the bottom is the failure this screen
-            # cannot have: `auto` is the last of the four and the one that
-            # stops the queue downloading at all. The blank lines between the
-            # blocks are what the screen gives up first, so what is left has
-            # to fit the shortest phone there is — 20 rows, less the bar, the
-            # flash, the keys and the margins.
-            for width in (32, 40):
-                tight = [line for line in settings_lines(width) if line[1]]
+            # cannot have: `auto` stops the queue downloading at all and
+            # `notify-blocked` sits below it. What the screen gives up to fit
+            # is settings_body's business — the blanks, then the grey meaning
+            # lines — and what it must come to is the shortest phone there is:
+            # 20 rows, less the bar, the flash, the keys and the margins.
+            for width in (32, 40, 80):
+                shown = settings_body(width, 20)
                 at_most(
-                    f"all four settings fit a 20-row phone at {width}",
-                    len(tight),
+                    f"every setting fits a 20-row phone at {width}",
+                    len(shown),
                     20 - 6,
                 )
+                check(
+                    f"and every one of them is named at {width}",
+                    [tone for _, _, tone in shown].count("head"),
+                    len(runner.SETTINGS),
+                )
+                check(
+                    f"with its value beside it at {width}",
+                    all(
+                        runner.spell_setting(name, runner.settings()[name]) in text
+                        for name, (_, text, _) in zip(
+                            runner.SETTINGS,
+                            [line for line in shown if line[2] == "head"],
+                            strict=True,
+                        )
+                    ),
+                    True,
+                )
+            # A screen with the room keeps what the short one gave up.
+            check(
+                "a tall screen keeps what each setting means",
+                any(tone == "90" for _, _, tone in settings_body(40, 40)),
+                True,
+            )
             store({"window_minutes": 120})
             texts = [text for _, text, _ in settings_lines(80)]
             check(
@@ -2844,14 +2895,20 @@ def _self_test() -> int:
             )
 
             # The same rule with a problem taking up room: the wrapped red
-            # line may cost the last meaning line, never a setting's name.
+            # line may cost the meaning lines, never a setting's name and never
+            # the value being declined.
             for width in (32, 40):
-                tight = [line for line in settings_lines(width) if line[1]]
-                named = [tone for _, _, tone in tight[: 20 - 6] if tone == "head"]
+                shown = settings_body(width, 20)[: 20 - 6]
                 check(
                     f"every setting is still named on a 20-row phone at {width}",
-                    len(named),
+                    [tone for _, _, tone in shown].count("head"),
                     len(runner.SETTINGS),
+                )
+                declined = "✗ config.json says 100"
+                check(
+                    f"and the value being ignored is still said at {width}",
+                    any(text.startswith(declined) for _, text, _ in shown),
+                    True,
                 )
 
             # A stored null. The runner refuses it like any other value it

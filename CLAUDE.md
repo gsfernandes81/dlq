@@ -106,37 +106,56 @@ Decisions that travel with this code — each was arrived at the hard way:
   checkout, and the shim replaces itself in `sys.modules` with the real one —
   it can go when the last pre-split item is gone.
 - **`dlq settings` / `s` on the queue screen** (2026-09-02): the window, the
-  reserve, `reserve-when-paid` and `auto` live in `config.json` beside the
-  destinations, and are read at the moment they are used, never cached —
-  `expire_runner.SETTINGS` is the one spec, and both front ends read it
-  through the runner rather than keeping a second copy of the names, the
-  defaults or the rules. **`off` is the first thing `gate()` asks**, ahead of
-  the empty queue, because it is the answer to "why did nothing happen
-  tonight" on every night it is off; `run-now`'s `--force` steps over it
-  exactly as it steps over the clock, because the switch is a *when*, not a
-  guard over money — the reserve, the per-item caps and the portal reading
-  answer to nobody's `--force`. A value found in `config.json` that fails its
-  rule reads as the default rather than raising: this is read at the top of a
-  firing nobody is watching, and a stray character typed into the file must
-  not be able to stop a night's downloads or take out the reserve on its way
-  past — `dlq settings` and `dlq dump` name what they declined instead.
-  **Reading a broken `config.json` is forgiving; writing over one is refused**
-  — `load_config` answers a file that will not parse with an empty dict, so a
-  save on top of it would be a fresh file holding only the new key, with the
-  destinations and the other settings gone under a line saying it worked.
-  `config_problem` is the one line that says so: `set_setting` and `set_dest`
-  refuse with it and write nothing, and both screens and the dump print it.
-  And **whether a stored value is in force is one function's answer** —
-  `setting_state`, keyed on the key being *present*, because the three places
-  that show the settings each used to decide it and a file holding `null` read
-  as refused on the screen and as nothing at all from the command. The
-  reserve is waived on `paid.left_bytes > 0`, never on a threshold, because
-  `paid.left_bytes` can only understate what is actually paid for while
-  `free.left_bytes` can only overstate what is actually free — "there is paid
-  data" is the one direction that reading cannot be wrong about, so it is the
-  only question the waiver asks. And the window is a multiple of 15 minutes
-  because that is JobScheduler's own floor for a periodic job — a window that
-  is not a multiple of one would buy nothing beyond the nearest firing below it.
+  reserve, `reserve-when-paid`, `paid-min`, `auto` and `notify-blocked` live
+  in `config.json` beside the destinations, and are read at the moment they
+  are used, never cached — `expire_runner.SETTINGS` is the one spec, and both
+  front ends read it through the runner rather than keeping a second copy of
+  the names, the defaults or the rules. **`off` is the first thing `gate()`
+  asks**, ahead of the empty queue, because it is the answer to "why did
+  nothing happen tonight" on every night it is off; `run-now`'s `--force`
+  steps over it exactly as it steps over the clock, because the switch is a
+  *when*, not a guard over money — the reserve, the per-item caps and the
+  portal reading answer to nobody's `--force`. A value found in `config.json`
+  that fails its rule reads as the default rather than raising: this is read
+  at the top of a firing nobody is watching, and a stray character typed into
+  the file must not be able to stop a night's downloads or take out the
+  reserve on its way past — `dlq settings` and `dlq dump` name what they
+  declined instead. **Reading a broken `config.json` is forgiving; writing
+  over one is refused** — `load_config` answers a file that will not parse
+  with an empty dict, so a save on top of it would be a fresh file holding
+  only the new key, with the destinations and the other settings gone under a
+  line saying it worked. `config_problem` is the one line that says so:
+  `set_setting` and `set_dest` refuse with it and write nothing, and both
+  screens and the dump print it. Six settings do not fit a 20-row phone, so
+  `settings_body` — the one rule, checked rather than trusted — gives up the
+  blank lines between the blocks first and then the grey line saying what each
+  setting means, never a setting's name, its value or a red line naming a
+  stored value being ignored. And **whether a stored value is in force is one
+  function's answer** — `setting_state`, keyed on the key being *present*,
+  because the three places that show the settings each used to decide it and a
+  file holding `null` read as refused on the screen and as nothing at all from
+  the command. The reserve is waived on `paid.left_bytes` alone, never on
+  `free.left_bytes`, because `paid.left_bytes` can only understate what is
+  actually paid for while `free.left_bytes` can only overstate what is
+  actually free — "there is paid data" is the one direction that reading
+  cannot be wrong about, so it is the only reading the waiver asks.
+  **`paid-min` defaults to 0, which is that same question**
+  (`reserve_waived`'s threshold floors at one byte, so nought means "any paid
+  data at all" and the waiver behaves exactly as it did before there was a
+  figure); a figure above it is the person's own judgement that their last few
+  MB of paid data are not worth the reserve they would stand down, and because
+  the reading understates, wanting "at least this much" can only ever keep the
+  reserve for longer. It qualifies `reserve-when-paid` and does nothing on its
+  own, which the setting's own sentence says rather than a refusal saying it.
+  **`notify-blocked` covers the blocked-firing notification and no other** —
+  that one repeats every ~15 minutes on a phone off the vessel's wifi, which
+  is how a person learns to ignore notifications, while a malformed item and
+  an item that has run out of nights each happen once and still need somebody;
+  off leaves the log line and `dlq status` exactly as they were, and the
+  switch is asked in `say_blocked`, not inside `notify`. And the window is a
+  multiple of 15 minutes because that is JobScheduler's own floor for a
+  periodic job — a window that is not a multiple of one would buy nothing
+  beyond the nearest firing below it.
 
 ## Checks
 
