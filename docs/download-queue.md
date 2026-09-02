@@ -473,14 +473,24 @@ whichever way the queue is arranged; push `some-talk` above `ubuntu-24-04`
 and the line still falls wherever 480 MiB runs out, just between a different
 pair of names.
 
-When nothing would get anything tonight — the window closed, a fault
-blocking the firing, every queued item too big for what is left — the line
-moves to the top of the queued group and names why instead of a byte figure:
-`── nothing tonight: waiting for the window ──` and so on, or the first
-item's own reason when the budget itself is the problem. It shortens to
-`── tonight: 480 MiB ──` on the narrowest phones, and there is no line at all
+When nothing would get anything tonight — the window closed, no reading to
+spend against, every queued item too big for what is left — the line moves to
+the top of the queued group and names why instead of a byte figure:
+`── nothing tonight: done ──` once the window has closed,
+`── nothing tonight: no portal reading ──` on a phone away from the vessel's
+wifi, and the item's own reason — `── nothing tonight: needs 200 MiB, 50 MiB
+spendable ──` — only where there is a budget and the queue still does not fit
+inside it. The reason is the half that survives a narrow phone: the
+`nothing tonight:` in front of it is what gives way first, so 32 columns get
+`── no portal reading ──`. The figure line shortens to
+`── tonight: 446 MiB ──` on the narrowest phones, and there is no line at all
 before the first reading has come back — the verdict line reads `tonight:
 asking zwana…` until it does.
+
+A download the night only gets part-way through says so on its own row:
+`three  -  0 B/≤210 MiB · 46 MiB tonight` sits above the line, because it
+does get bytes tonight, and the figure is how many of them. Items that
+finish tonight and items below the line carry nothing extra.
 
 **`n` here is `dlq run-now`, and it means now.** The nightly window is a
 schedule, not a permission: pressing it ignores the window exactly as the
@@ -570,11 +580,13 @@ Or `s` on the main screen, which shows the same six and takes the same
 changes: the switches toggle where they sit, and the numbers open a field,
 prefilled with what they are now — type `default` to put the built-in one
 back, same as on the command line. Two more rows sit under those six, in the
-same layout: `d` for the destinations (see [Where downloads
-go](#where-downloads-go)) and `j` for the nightly job — armed, not armed, or
-the error stopping it from arming — which arms it when it is not armed and
-cancels it, with a confirm, when it is. Each row's key is beside its name
-(`w r p m a n d j`); on a short phone the screen keeps every name, value and
+same layout: `d` for the destinations — the folder they all share, written
+with `~` where it is under home and shortened to just the folder's own name
+(`Download`) where the whole path will not fit beside the label (see [Where
+downloads go](#where-downloads-go)) — and `j` for the nightly job — armed,
+not armed, or the error stopping it from arming — which arms it when it is
+not armed and cancels it, with a confirm, when it is. Each row's key is
+beside its name (`w r p m a n d j`); on a short phone the screen keeps every name, value and
 complaint and drops the grey line saying what each one means.
 
 | setting              | default | what it does                                     |
@@ -586,7 +598,7 @@ complaint and drops the grey line saying what each one means.
 | `auto`               | on      | let the nightly job actually download              |
 | `notify-blocked`     | on      | a firing stopped by a fault says so on the phone   |
 | `destinations` (`d`) | Downloads | where finished files land, by kind — opens the destinations screen |
-| `nightly job` (`j`)  | armed   | arm the scheduled firing, or cancel it with a confirm |
+| `nightly job` (`j`)  | as registered | arm the scheduled firing, or cancel it with a confirm |
 
 A value typed as `45`, `45m` or `2h` sets the window; `150` or `150MB` sets
 the reserve and `paid-min`; `on`, `off`, `yes`, `no`, `true`, `false`, `1` and

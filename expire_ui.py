@@ -948,19 +948,21 @@ def item_lines(
 # What tonight would download
 # --------------------------------------------------------------------------- #
 
-#: The verdict line's phrase for each of :data:`expire_sched.VERDICTS`, in the
-#: spelling a phone has room for. The *long* spelling is not here on purpose:
-#: it is the status screen's own headline, read straight out of ``VERDICTS``,
-#: so the listing and ``dlq status`` cannot come to two different words for the
-#: same night. This table only adds the short one, for the width where the
-#: headline and the clock will not both fit — and the self-test pins that every
-#: verdict has an entry, because one the gate grew and this did not would draw
-#: the narrow phone a blank where the answer goes.
+#: The verdict line's phrase for each of :data:`expire_sched.VERDICTS` — **one
+#: phrase per verdict, at every width**. The status screen's own headline is
+#: not here on purpose: it is read straight out of ``VERDICTS`` by everything
+#: that wants the long form, so the listing and ``dlq status`` cannot come to
+#: two different words for the same night. What this table adds is the phrase
+#: that goes *after* "tonight:", which is why none of them says "tonight"
+#: itself — the headlines do ("waiting for tonight", "done for tonight"), and
+#: the wide screen used to print the word twice in one line. The self-test pins
+#: an entry for every verdict, because one the gate grew and this did not would
+#: draw a blank where the answer goes.
 TONIGHT_SHORT = {
     "downloading": "downloading",
     "go": "window open",
     "early": "waiting",
-    "late": "done tonight",
+    "late": "done",
     "empty": "nothing queued",
     "off": "auto is off",
     "spent": "no data to spend",
@@ -1033,21 +1035,24 @@ def tonight_lines(facts: dict | None, width: int, live: str = "") -> list[str]:
     room = max(8, width - 2)
     if not facts:
         return [_fit(ASKING, room), ""]
-    verdict = "downloading" if live else facts["verdict"]
     if live:
         head = _fit(f"downloading now: {_slug_of(live)}", room)
     else:
-        long = sched.VERDICTS.get(verdict, (facts["detail"], ""))[0]
-        short = TONIGHT_SHORT.get(verdict, long)
+        verdict = facts["verdict"]
+        # One phrase for the verdict at every width, and only the clock behind
+        # it gives way. The wide screen used to be given the status screen's
+        # long headline instead and read "tonight: waiting for tonight, opens
+        # 23:00Z (46m)" — the same word twice in the line that is read first
+        # and at a glance. The headline is not wrong there; it is wrong *after*
+        # a "tonight:", and this line is the only place with one in front.
+        phrase = TONIGHT_SHORT.get(
+            verdict, sched.VERDICTS.get(verdict, (facts["detail"], ""))[0]
+        )
         # An empty queue has no next state worth naming: the window opening on
         # nothing is not a thing to wait for.
         tails = [""] if verdict == "empty" else [f", {when}" for when in _when(facts)]
         head = _pick(
-            [
-                f"tonight: {phrase}{tail}"
-                for tail in [*dict.fromkeys(tails), ""]
-                for phrase in (long, short)
-            ],
+            [f"tonight: {phrase}{tail}" for tail in [*dict.fromkeys(tails), ""]],
             room,
         )
     return [head, _fit(_tonight_figures(facts, room), room)]
@@ -1141,8 +1146,28 @@ def _rule(spellings: list[str], width: int) -> str:
     return _fit(drawn + "─" * max(2, room - len(drawn)), room)
 
 
+def _nothing_to_spend(facts: dict) -> str:
+    """Why tonight has no budget at all — the answer above every item's own.
+
+    Three ways for the budget to be nought with the night otherwise willing,
+    and they are not the same thing to do something about: a portal that did
+    not answer is the phone being off the vessel's wifi, a stale reading is
+    one that answered with yesterday's figures, and a reading with nothing
+    spendable in it is a night where the allowance is genuinely gone. Only the
+    last of them is about the data.
+    """
+    if facts["portal"] is None:
+        return "no portal reading"
+    if not sched._runner().usable(facts["portal"]):
+        return "reading is stale"
+    return "no data to spend"
+
+
 def cut_index(
-    order: list[str], facts: dict | None, width: int
+    order: list[str],
+    facts: dict | None,
+    width: int,
+    planned: list[dict] | None = None,
 ) -> tuple[int | None, str]:
     """``(how many queued items tonight reaches, the line to say so)``.
 
@@ -1163,14 +1188,24 @@ def cut_index(
     better than a line drawn from figures nobody has.
 
     When nothing gets anything the line goes to the top of the queued group and
-    says why, which is the only place the answer can be. A verdict that stops
-    the whole night is quoted in the status screen's own words; otherwise it is
-    the first refusal :func:`expire_runner.admit` gave, which is the runner
+    says why, which is the only place the answer can be — and the answer is
+    taken from as far up as it goes. A verdict that stops the whole night is
+    quoted in the status screen's own words; a night with no budget at all says
+    why there is none (:func:`_nothing_to_spend`), because with nothing to
+    spend every item is refused and the first refusal would blame the item for
+    it; only where there is a budget and the items still do not fit is an
+    item's own refusal the answer, which is :func:`expire_runner.admit`
     explaining itself in the same sentence it would log.
     """
     if not facts or not order:
         return None, ""
-    planned = tonight_plan(order, facts)
+    # *planned* is :func:`tonight_plan` on this same *order*, handed in by the
+    # one caller that also needs it for the rows — the projection is asked for
+    # once per draw and both the line and the rows are drawn from that one
+    # answer, so a row cannot say a download gets bytes on a night the line
+    # below it says it does not. Left out, it is asked for here.
+    if planned is None:
+        planned = tonight_plan(order, facts)
     got = {entry["name"]: entry["bytes"] for entry in planned}
     last = -1
     for position, name in enumerate(order):
@@ -1182,23 +1217,48 @@ def cut_index(
             [f"tonight ends here: {total}", f"tonight: {total}"], width
         )
     verdict = facts["verdict"]
-    if verdict in (*sched._runner().GATE_GO, "early"):
-        # The night is one that downloads, so the answer is about the items:
-        # the runner's own first refusal, word for word.
+    if verdict not in (*sched._runner().GATE_GO, "early"):
+        why = sched.VERDICTS.get(verdict, (facts["detail"], ""))[0]
+        short = TONIGHT_SHORT.get(verdict, why)
+    elif facts["spendable"] <= 0 and not facts["blind"]:
+        # Why there is nothing to spend comes *before* any item's own refusal.
+        # With a budget of nought every item is turned down for being bigger
+        # than nothing, and the first of those refusals reads as a fact about
+        # that item — "slice 0 B below the useful minimum 32 MiB" — on a night
+        # whose actual answer is that no reading arrived. The item is not the
+        # reason; the missing budget is, and this says which kind it is.
+        why = short = _nothing_to_spend(facts)
+    else:
+        # A night that downloads, with something to spend on it: the answer
+        # really is about the items, so it is the runner's own first refusal,
+        # word for word.
         why = next(
             (entry["reason"] for entry in planned if entry["reason"]),
             "nothing fits tonight",
         )
-    else:
-        why = sched.VERDICTS.get(verdict, (facts["detail"], ""))[0]
-    # Three spellings, because a refusal out of `admit` carries its working in
-    # brackets — "(budget 0 B, 3122s left)" — and that is the half worth losing
-    # first: the sentence in front of it is the answer, the bracket is how it
-    # was arrived at.
+        # A refusal out of `admit` carries its working in brackets — "(budget
+        # 0 B, 3122s left)" — and that is the half worth losing first.
+        short = why.split(" (")[0]
+    # The reason is what a phone keeps. The lead-in goes before it does: at 32
+    # columns there are twenty-five for both, and "nothing tonight" is already
+    # the shape of the line — a rule across the top of the queued group with no
+    # item on it — while the reason is the half nothing else on the screen
+    # says. A line reading `── nothing tonight ──` and no more is the screen
+    # knowing the answer and declining to give it.
+    spellings = [
+        f"nothing tonight: {why}",
+        f"nothing tonight: {short}",
+        why,
+        short,
+        "nothing tonight",
+    ]
+    # And never the word twice in one line. Several of the verdicts' headlines
+    # say "tonight" themselves — "done for tonight", "no data to spend tonight"
+    # — and after a lead-in that has just said it they read as a stammer. The
+    # spelling is dropped rather than reworded: `VERDICTS` stays the one set of
+    # words for a night, and there is always another rung under this one.
     return 0, _rule(
-        [f"nothing tonight: {why}", f"nothing tonight: {why.split(' (')[0]}",
-         "nothing tonight"],
-        width,
+        [text for text in spellings if text.count("tonight") <= 1], width
     )
 
 
@@ -1207,11 +1267,43 @@ def cut_index(
 # --------------------------------------------------------------------------- #
 
 
+def _beside(share: str) -> str:
+    """The share as it reads next to the figures: ``" · 46 MiB tonight"``.
+
+    One spelling, because it is measured in one place and drawn in another and
+    a lead-in counted at one width and drawn at a second is a clipped line.
+    """
+    return f" · {share}" if share else ""
+
+
+def _tonight_share(row: dict, planned: int) -> str:
+    """``46 MiB tonight`` for a download the night reaches only part of.
+
+    The one row where the cut line is not the whole answer: the item that
+    straddles it. A resumable download is handed whatever is left of the budget
+    when the projection reaches it — 46 MiB of a 210 MiB item — and it sits
+    *above* the line, correctly, because it does get bytes tonight; but the row
+    read exactly like the two above it, which finish. This is the figure that
+    says how much of it tonight actually buys.
+
+    Nothing for an item the night finishes, and nothing for one it never
+    reaches: on most rows the figure would only be the progress cell's own
+    number said twice, and the one row where it is news would be lost in them.
+    """
+    if planned <= 0:
+        return ""
+    need = max(0, row.get("cap", 0) - row.get("have", 0))
+    if planned >= need:
+        return ""
+    return f"{ytq.human(planned)} tonight"
+
+
 def compose_rows(
     rows: list[dict],
     width: int,
     live: str = "",
     cut: tuple[int, str] | None = None,
+    tonight: list[dict] | None = None,
 ) -> list[tuple[int | None, list[str]]]:
     """The whole listing as ``(which row, its lines)``, headings included.
 
@@ -1229,6 +1321,15 @@ def compose_rows(
     :func:`landed_index` cannot land on it, and no row's index moves because it
     is there. The self-test pins both halves.
 
+    *tonight* is :func:`tonight_plan`'s answer for the same order — passed in
+    rather than worked out here, so the rows and the cut line are drawn from
+    one projection. It puts ``· 46 MiB tonight`` on the one row that needs it,
+    the item the night only gets part of the way through
+    (:func:`_tonight_share`); it is on the row at every width, taking a line of
+    its own on a phone too narrow to hold it beside the figures, because a row
+    above the line that does not finish tonight is exactly the thing the line
+    alone cannot say.
+
     Two shapes, on the same rule the listing uses: one line each while the
     name, the state and the figures fit together, and two lines each when they
     do not. The name is the last cell to give up room, because losing its tail
@@ -1236,6 +1337,11 @@ def compose_rows(
     difference between removing one and removing the other.
     """
     compact = width < WIDE
+    # What each queued row gets tonight, by name. An item the projection does
+    # not mention — anything that is not queued, or queued since the reading —
+    # gets nothing said about it rather than a nought.
+    got = {entry["name"]: entry["bytes"] for entry in tonight or []}
+    shares = [_tonight_share(row, got.get(row["name"], 0)) for row in rows]
     cells = [
         (
             _slug_of(row["name"]),
@@ -1250,7 +1356,15 @@ def compose_rows(
     ]
     name_w = max((len(cell[0]) for cell in cells), default=0)
     state_w = max((len(cell[1]) for cell in cells), default=0)
-    prog_w = max((len(cell[2]) for cell in cells), default=0)
+    # The share is measured as part of the figures cell, so a row carrying one
+    # is what decides whether the listing still fits on one line each.
+    prog_w = max(
+        (
+            len(cell[2]) + len(_beside(share))
+            for cell, share in zip(cells, shares, strict=True)
+        ),
+        default=0,
+    )
     # One column in hand at the right: curses treats a write into the last cell
     # of a line as an error, so the whole screen is laid out one narrower.
     room = width - 1
@@ -1268,19 +1382,25 @@ def compose_rows(
             if cut and where == "queued" and at == cut[0]:
                 out.append((None, [cut[1]]))
             name, state, progress, note = cells[index]
+            share = shares[index]
             if tight:
                 figures = f"{state:>{state_w}}  {progress}"
-                out.append(
-                    (
-                        index,
-                        [
-                            f"  {_fit(name, room - 2)}",
-                            f"    {_fit(figures, room - 4)}",
-                        ],
-                    )
-                )
+                lines = [f"  {_fit(name, room - 2)}"]
+                if len(figures) + len(_beside(share)) <= room - 4:
+                    lines.append(f"    {_fit(figures + _beside(share), room - 4)}")
+                else:
+                    # A third line rather than a clipped second one: what would
+                    # fall off the end is the only figure on the row that is
+                    # about tonight, and the row is the only place it is said.
+                    lines.append(f"    {_fit(figures, room - 4)}")
+                    if share:
+                        lines.append(f"    {_fit(share, room - 4)}")
+                out.append((index, lines))
                 continue
-            line = f"  {name.ljust(name_w)}  {state:>{state_w}}  {progress}"
+            line = (
+                f"  {name.ljust(name_w)}  {state:>{state_w}}  "
+                f"{progress}{_beside(share)}"
+            )
             if note_w >= 14:
                 line += f"  {_fit(note, note_w)}"
             out.append((index, [line[:room].rstrip()]))
@@ -1359,7 +1479,8 @@ def draw_list(
     stops, and it is worked out **here, every draw, from the order on the
     screen** — which is what makes it follow a held item as ↑↓ move it, and
     what makes it recompute after a drop without anything having to remember
-    to ask.
+    to ask. The same projection tells the rows how much of the item that
+    straddles the line comes tonight, so the two cannot disagree.
 
     The spare row above the keys carries :data:`LEGEND_KEYS` on the screens
     that have nothing else to say there — no download in flight, no flash,
@@ -1394,9 +1515,18 @@ def draw_list(
     for offset, text in enumerate(header):
         _addstr(win, 1 + offset, 1, text, curses.A_BOLD if not offset else 0)
     order = [row["name"] for row in shown if row["where"] == "queued"]
-    reaches, ruled = cut_index(order, facts, width)
+    # One projection per draw, and both the line and the rows are drawn from
+    # it: the line says where tonight stops, the rows say how much of the item
+    # that straddles it comes tonight, and asking twice would be two answers to
+    # one question with nothing on the screen saying which was which.
+    planned = tonight_plan(order, facts)
+    reaches, ruled = cut_index(order, facts, width, planned)
     entries = compose_rows(
-        shown, width, queue.live, None if reaches is None else (reaches, ruled)
+        shown,
+        width,
+        queue.live,
+        None if reaches is None else (reaches, ruled),
+        planned,
     )
     flat = [(index, text) for index, lines in entries for text in lines]
     listed = max(1, height - 7)
@@ -1532,7 +1662,15 @@ def list_screen(
             queue.read()
             found = queue.index_of(name)
             cursor = cursor if found is None else found
-            flash = queue.said()
+            # `or flash`, and that word is the whole of it: this branch runs
+            # four times a second while a reading is in the air, and a plain
+            # assignment made every one of those a message being cleared —
+            # "armed the nightly job", "forgot x — the file had gone" — a
+            # quarter of a second after it was put there, on the screen that
+            # was waiting to say it. `said()` still speaks the moment it has
+            # something, since it is asked first and only an empty answer
+            # leaves what was already there.
+            flash = queue.said() or flash
             if mine_was and not queue.mine():
                 # A run of ours ending is the one moment the figures behind
                 # this screen really do change, and the moment someone is
@@ -2352,6 +2490,25 @@ def arm_job(win, paint) -> tuple[str, bool]:
     return text, worked
 
 
+def cancel_note() -> list[str]:
+    """What the unregister confirm says — out here so it can be checked.
+
+    The last line is the way back, and the key on it is read from
+    :data:`PAGE_KEYS` rather than typed out: it said ``a`` for as long as the
+    queue had a screen of its own with arming on it, and went on saying ``a``
+    after the key moved. ``a`` is the *auto* switch now, so the sentence
+    offering the way back was sending someone to the key that stops the queue
+    downloading at all — a confirm can be wrong about its own screen, and this
+    is the one line where being wrong costs the nightly job.
+    """
+    return [
+        "stop the nightly job?",
+        "nothing downloads by itself after this",
+        f"{chr(PAGE_KEYS[1])} arms it again, and the queue is untouched "
+        "either way",
+    ]
+
+
 def cancel_job(win, paint, job) -> tuple[str, bool]:
     """Unregister the job — the one action here whose damage is silence.
 
@@ -2360,17 +2517,8 @@ def cancel_job(win, paint, job) -> tuple[str, bool]:
     exactly like a queue waiting for tonight.
     """
     if not armed(job):
-        return "it is not armed; j registers it", False
-    if not confirm(
-        win,
-        paint,
-        " unregister ",
-        [
-            "stop the nightly job?",
-            "nothing downloads by itself after this",
-            "a arms it again, and the queue is untouched either way",
-        ],
-    ):
+        return f"it is not armed; {chr(PAGE_KEYS[1])} registers it", False
+    if not confirm(win, paint, " unregister ", cancel_note()):
         return "still armed", False
     state, said = waiting(
         win, paint, " unregister ", "asking Android's scheduler…", sched.do_cancel
@@ -2505,13 +2653,25 @@ SETTING_KEYS = (ord("w"), ord("r"), ord("p"), ord("m"), ord("a"), ord("n"))
 PAGE_KEYS = (ord("d"), ord("j"))
 
 
-def _page_rows(job: list[tuple[str, str, str]] | None) -> list[tuple[str, str, str]]:
-    """``(name, value, what it means)`` for the ``d`` and ``j`` rows.
+def _page_rows(
+    job: list[tuple[str, str, str]] | None,
+) -> list[tuple[str, list[str], str]]:
+    """``(name, the value's spellings, what it means)`` for ``d`` and ``j``.
 
     The destinations are one row rather than three: three paths is the
     destinations *screen*, and this page's job is to say whether they are worth
     opening. One folder for all three kinds is the common case and is worth
     naming; anything else is a count and a key.
+
+    That value is a **path**, which is the one thing on this page that does not
+    shorten by itself: ``~``-written, Android's own Downloads folder is 28
+    columns and a 40-column phone leaves nineteen for it, so the row read
+    ``d  destinations  /storage/emulated/0…`` — a clip that names no folder at
+    all and hides the very word that would have answered the question. The
+    second spelling is the last component, ``Download``, which is the half a
+    person recognises; the whole path is one keypress away on the screen ``d``
+    opens. :func:`_pick` chooses between them, as it does for every other line
+    on this screen that is written more than one way.
 
     The job's own words are :func:`expire_sched.job_rows`', unchanged — the
     same text ``dlq status`` prints, so this page and that one cannot disagree
@@ -2520,19 +2680,20 @@ def _page_rows(job: list[tuple[str, str, str]] | None) -> list[tuple[str, str, s
     """
     dests = sched._runner().dests()
     folders = {str(path) for path in dests.values()}
+    one = sched._short(next(iter(dests.values())))
     return [
         (
             "destinations",
             (
-                sched._short(next(iter(dests.values())))
+                [one, Path(one).name or one]
                 if len(folders) == 1
-                else f"{len(folders)} folders"
+                else [f"{len(folders)} folders"]
             ),
             "where finished downloads are moved to",
         ),
         (
             "nightly job",
-            job[0][1] if job else "not read",
+            [job[0][1] if job else "not read"],
             "the firing that downloads while you sleep",
         ),
     ]
@@ -2591,9 +2752,15 @@ def settings_lines(
                     f"✗ config.json says {stored!r}: {problem}", width - 6, "  "
                 )
             ]
-    for letter, (name, value, label) in zip(PAGE_KEYS, _page_rows(job), strict=True):
+    for letter, (name, spellings, label) in zip(
+        PAGE_KEYS, _page_rows(job), strict=True
+    ):
         lines.append((0, "", ""))
-        head = f"{chr(letter)}  {name}  {value}"
+        # The value is fitted against what is actually left of the line rather
+        # than clipped off the end of it: what falls off a path is its folder,
+        # which is the whole of what the row was saying.
+        head = f"{chr(letter)}  {name}  "
+        head += _pick(spellings, max(8, width - 4 - len(head)))
         lines.append((2, _fit(head, width - 4), "head"))
         lines += [(5, text, "90") for text in _wrap(label, width - 6, "  ")]
     return lines
@@ -2689,16 +2856,22 @@ def settings_screen(win, paint: dict) -> tuple[str, bool]:
         key = win.getch()
         if key in (ord("q"), 27, curses.KEY_LEFT):
             return flash, changed
-        if key == ord("d"):
-            said, moved = dest_screen(win, paint)
-            flash, changed = said, changed or moved
-            continue
-        if key == ord("j"):
-            said, worked = (
-                cancel_job(win, paint, job) if armed(job) else arm_job(win, paint)
-            )
+        if key in PAGE_KEYS:
+            # Off the same tuple the two rows are laid out from and the hints
+            # are spelled from. It was two literals, and a key that moved in
+            # PAGE_KEYS would have gone on opening the screen it used to —
+            # which is how the unregister confirm came to offer `a`. The
+            # unpack is the check: a third row added there stops here, loudly,
+            # rather than becoming a key nothing answers.
+            dest_key, job_key = PAGE_KEYS
+            if key == dest_key:
+                said, worked = dest_screen(win, paint)
+            else:
+                said, worked = (
+                    cancel_job(win, paint, job) if armed(job) else arm_job(win, paint)
+                )
             flash, changed = said, changed or worked
-            if worked:
+            if worked and key == job_key:
                 # The row above says whether it is armed, and the answer just
                 # moved: ask the scheduler again rather than draw the old one.
                 state, fresh = waiting(
@@ -3098,6 +3271,14 @@ def _self_test() -> int:
             len(TONIGHT_SHORT[verdict]),
             len(headline),
         )
+        # And it goes after a "tonight:", so it must not say tonight itself.
+        # The wide screen used to grow the headline instead and read "tonight:
+        # waiting for tonight, opens 23:00Z (46m)".
+        check(
+            f"and the {verdict} phrase does not repeat the lead-in",
+            "tonight" in TONIGHT_SHORT[verdict],
+            False,
+        )
     for verdict in sched.VERDICTS:
         if verdict == "downloading":
             continue
@@ -3111,6 +3292,19 @@ def _self_test() -> int:
                 f"and the {verdict} verdict line says something",
                 lines[0].startswith("tonight: "),
                 True,
+            )
+            # One wording at every width: the clock behind the verdict is the
+            # only part that gives way, so a wide screen cannot be given a
+            # phrase a narrow one is not.
+            check(
+                f"in the one wording the {verdict} verdict has at {width}",
+                lines[0].split(",")[0],
+                f"tonight: {TONIGHT_SHORT[verdict]}",
+            )
+            check(
+                f"and it says tonight once at {width}",
+                lines[0].count("tonight"),
+                1,
             )
     # Before the first reading has come back. Not a blank and not a zero: the
     # screen opens on this, and a figure nobody has read is worse than a word.
@@ -3214,28 +3408,182 @@ def _self_test() -> int:
     # Nothing tonight: the line goes to the top of the group and says why.
     # A verdict that stops the night is quoted in the status screen's words;
     # a night that would run and cannot afford anything gets the runner's own
-    # refusal, which is the sentence it would have logged.
+    # refusal, which is the sentence it would have logged. Checked at all three
+    # widths, because the reason is the half of this line that has to survive
+    # a phone: `── nothing tonight ──` on its own is the screen knowing the
+    # answer and keeping it, which is what 32 and 40 columns used to get.
     for verdict in ("off", "late", "no-portal", "stale", "empty", "spent"):
         stopped = sched._fake_facts(
             verdict, items=trio_facts["items"], spendable=0, bps=8 * 1024 * 1024
         )
-        where, text = cut_index(trio, stopped, 80)
-        check(f"a {verdict} night reaches nothing", where, 0)
-        check(
-            f"and the line names the {verdict} verdict",
-            sched.VERDICTS[verdict][0] in text,
-            True,
-        )
+        for width in (32, 40, 80):
+            where, text = cut_index(trio, stopped, width)
+            check(f"a {verdict} night reaches nothing at {width}", where, 0)
+            at_most(f"and its line fits {width}", len(text), width - 1)
+            check(
+                f"and the line still names the {verdict} verdict at {width}",
+                sched.VERDICTS[verdict][0] in text or TONIGHT_SHORT[verdict] in text,
+                True,
+            )
+            # Once, though: half the headlines say "tonight" themselves, and
+            # `── nothing tonight: done for tonight ──` is a stammer.
+            at_most(f"and says tonight once at {width}", text.count("tonight"), 1)
+
+    # The night that made this worth fixing: 46 minutes before the window, on a
+    # phone with no portal credentials. The verdict is `early` — a night that
+    # WOULD download — and the budget is nought, so every item is refused for
+    # being bigger than nothing and the first of those refusals ("slice 0 B
+    # below the useful minimum 32 MiB") was what the line said. It reads as a
+    # fact about that item on a night whose answer is that no reading arrived.
+    reading = trio_facts["portal"]
+    for spelling, dark in (
+        ("no portal reading", sched._fake_facts(
+            "early", items=trio_facts["items"], spendable=0, portal=None)),
+        ("reading is stale", sched._fake_facts(
+            "early", items=trio_facts["items"], spendable=0,
+            portal={**reading,
+                    "reading": {**reading["reading"], "age_seconds": 9_000}})),
+        ("no data to spend", sched._fake_facts(
+            "early", items=trio_facts["items"], spendable=0)),
+    ):
+        for width in (32, 40, 80):
+            where, text = cut_index(trio, dark, width)
+            check(f"a night with no budget reaches nothing at {width}", where, 0)
+            at_most(f"and that line fits {width}", len(text), width - 1)
+            check(
+                f"and it says {spelling!r} at {width}",
+                spelling in text,
+                True,
+            )
+            check(
+                f"rather than what nought does to the first item at {width}",
+                "useful minimum" in text,
+                False,
+            )
+    # Only where there IS a budget and the items still do not fit is the item's
+    # own refusal the answer — the runner's sentence, word for word.
     broke = sched._fake_facts(
-        "go", items=trio_facts["items"], spendable=1024, bps=8 * 1024 * 1024
+        "early", items=trio_facts["items"], spendable=1024, bps=8 * 1024 * 1024
     )
-    where, text = cut_index(trio, broke, 80)
-    check("a night that can afford nothing reaches nothing", where, 0)
+    for width in (40, 80):
+        where, text = cut_index(trio, broke, width)
+        check(f"a night that can afford nothing reaches nothing at {width}", where, 0)
+        check(f"and says so in the runner's own words at {width}",
+              "spendable" in text, True)
+
+    # ------------------------------- the item the line falls in the middle of
+    # Three resumable downloads of 200, 200 and 210 MiB against a 450 MiB
+    # budget. The first two come down whole; the third is handed what is left,
+    # 46 MiB of itself, and so belongs ABOVE the line — it does get bytes
+    # tonight. Without a figure of its own that row read exactly like the two
+    # above it, which finish: the line says where tonight stops and cannot say
+    # that one item is only part-way through when it does.
+    def _rows_for(items: list[dict]) -> list[dict]:
+        """The listing's rows for a set of items, as the reader would give them."""
+        return [
+            {
+                "name": item["name"],
+                "where": "queued",
+                "cap": item["cap"],
+                "have": item["part_bytes"],
+                # A queued item's figures as the reader gives them: what is on
+                # the disk against the cap it declared, with no server-stated
+                # size yet — the widest the progress cell gets, and so the
+                # width at which the share has to find room.
+                "total": item["cap"],
+                "stated": 0,
+                "error": None,
+                "files": [],
+                "desc": "",
+                "attempts": 0,
+            }
+            for item in items
+        ]
+
+    straddle_items = [
+        {"name": name, "cap": cap, "partial": 1, "slice_min": 32 * 1024 * 1024,
+         "part_bytes": 0, "desc": "", "attempts": 0}
+        for name, cap in zip(
+            trio,
+            (200 * 1024 * 1024, 200 * 1024 * 1024, 210 * 1024 * 1024),
+            strict=True,
+        )
+    ]
+    straddle = sched._fake_facts(
+        "go", spendable=450 * 1024 * 1024, bps=8 * 1024 * 1024, items=straddle_items
+    )
+    straddle_rows = _rows_for(straddle_items)
+    straddle_plan = tonight_plan(trio, straddle)
     check(
-        "and says so in the runner's own words",
-        "spendable" in text,
+        "two of the three come down whole",
+        [entry["bytes"] for entry in straddle_plan[:2]],
+        [200 * 1024 * 1024, 200 * 1024 * 1024],
+    )
+    part = straddle_plan[2]["bytes"]
+    check(
+        "and the third gets what is left of the budget",
+        0 < part < 210 * 1024 * 1024,
         True,
     )
+    check(
+        "so the line falls after all three of them",
+        cut_index(trio, straddle, 40, straddle_plan)[0],
+        3,
+    )
+    for width in (32, 40, 80):
+        reaches, ruled = cut_index(trio, straddle, width, straddle_plan)
+        drawn = compose_rows(
+            straddle_rows, width, "", (reaches, ruled), straddle_plan
+        )
+        for _, lines in drawn:
+            for line in lines:
+                at_most(f"a row carrying tonight's share fits {width}", len(line),
+                        width - 1)
+        told = {
+            index: " ".join(lines) for index, lines in drawn if index is not None
+        }
+        check(
+            f"every download is still on the screen at {width}",
+            sorted(told),
+            [0, 1, 2],
+        )
+        check(
+            f"the one the night is part-way through says how much at {width}",
+            f"{ytq.human(part)} tonight" in told[2],
+            True,
+        )
+        check(
+            f"and the two that finish say nothing extra at {width}",
+            [index for index in (0, 1) if "tonight" in told[index]],
+            [],
+        )
+    # And the whole-item queue is untouched by any of it: the user's one
+    # keypress still moves the line and nothing else, with no share on any row
+    # — an item that finishes tonight has nothing more to say than that.
+    whole_rows = _rows_for(trio_facts["items"])
+    for width in (32, 40, 80):
+        for order in (trio, lifted):
+            whole_plan = tonight_plan(order, trio_facts)
+            falls, rule = cut_index(order, trio_facts, width, whole_plan)
+            check(f"two of three, whatever the width, in {order} at {width}", falls, 2)
+            listed = compose_rows(
+                preview(whole_rows, "30-three.py", 1)
+                if order is lifted
+                else whole_rows,
+                width,
+                "",
+                (falls, rule),
+                whole_plan,
+            )
+            check(
+                f"and no row claims a share of itself in {order} at {width}",
+                [
+                    index
+                    for index, lines in listed
+                    if index is not None and "tonight" in " ".join(lines)
+                ],
+                [],
+            )
 
     # ------------------------------------------- it can never promise too much
     # The invariant the whole line rests on, checked the only way it is worth
@@ -3290,6 +3638,23 @@ def _self_test() -> int:
     check(
         "every setting has a key to reach it",
         len(SETTING_KEYS) >= len(runner.SETTINGS),
+        True,
+    )
+    # The two rows that are not settings answer to their own tuple, and nothing
+    # on the page may spell one of those keys by hand: the confirm that offers
+    # the way back said `a` for as long as arming lived on the queue's own
+    # screen, and `a` is the auto switch here — the sentence offering the way
+    # back was pointing at the key that stops the queue downloading at all.
+    check(
+        "the two page rows have keys of their own",
+        set(PAGE_KEYS) & set(SETTING_KEYS),
+        set(),
+    )
+    armed_by = [line for line in cancel_note() if " arms it" in line]
+    check("the unregister confirm says how to arm it again", len(armed_by), 1)
+    check(
+        "in the key that does it, and no other",
+        armed_by[0].startswith(f"{chr(PAGE_KEYS[1])} "),
         True,
     )
     for letter, name in zip(SETTING_KEYS, runner.SETTINGS, strict=False):
@@ -3537,6 +3902,31 @@ def _self_test() -> int:
                         [tone for _, _, tone in shown].count("head"),
                         len(runner.SETTINGS) + len(PAGE_KEYS),
                     )
+            # The destinations row on a phone. `~` does nothing for a path
+            # that is not under home, and Android's own Downloads folder is 28
+            # columns: the forty a phone has left nineteen of them for it, so
+            # the row read `d  destinations  /storage/emulated/0…` and named
+            # no folder at all — an ellipsis exactly where the answer was.
+            store({f"{kind}_dir": "/storage/emulated/0/Download"
+                   for kind in runner.DEST_KINDS})
+            for width, want in (
+                (32, "Download"),
+                (40, "Download"),
+                (80, "/storage/emulated/0/Download"),
+            ):
+                head = next(
+                    text
+                    for _, text, tone in settings_lines(width, armed_job)
+                    if tone == "head" and text.startswith("d  destinations")
+                )
+                check(
+                    f"the destinations row still names the folder at {width}",
+                    head.endswith(want),
+                    True,
+                )
+                check(f"and nothing is clipped away at {width}", "…" in head, False)
+            store({})
+
             # The job row is `job_rows`' own words, not a second spelling of
             # them: a page saying "not armed" over a status screen saying armed
             # is two screens each right on their own.

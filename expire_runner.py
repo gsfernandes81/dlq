@@ -1188,6 +1188,14 @@ def admit(
         return cap, ""
 
     cap = item["cap"]
+    if cap <= 0:
+        # A whole item that declared nothing to fetch. Nothing is not more than
+        # the budget and takes no time, so both tests below pass it and the cap
+        # comes back as zero with an empty reason: `fire()` logged "skip x: "
+        # with the sentence missing after the colon, and `plan()` handed the
+        # screen a row carrying neither bytes nor a reason for having none.
+        # Every refusal here is somebody's answer to "why did that not run".
+        return 0, "nothing to fetch"
     if cap > budget:
         return 0, f"needs {human(cap)}, {human(budget)} spendable"
     predicted = cap / rate
@@ -2880,6 +2888,29 @@ def _checks() -> int:
         "an item with nothing left to fetch is told so",
         admit(piece, {"part_bytes": 1000 * MiB}, plenty, fast, night, False),
         (0, "nothing left to fetch"),
+    )
+    # And the same for a whole item that declared nothing: a cap of nought is
+    # not more than the budget and takes no time, so it used to pass both tests
+    # and come back as (0, "") — a firing logging "skip x:" with the sentence
+    # missing, and a screen given a row with neither bytes nor a reason.
+    check(
+        "a whole item with no bytes to fetch is refused in words",
+        admit(_item("43-empty.py", 0), {}, plenty, fast, night, False),
+        (0, "nothing to fetch"),
+    )
+    check(
+        "and every refusal anywhere here carries some",
+        [
+            said
+            for got, said in [
+                admit(_item("43-empty.py", 0), {}, plenty, fast, night, False),
+                admit(_item("44-empty.py", 0), {}, 0, fast, night, False),
+                admit(whole, {}, 0, fast, night, False),
+                admit(piece, {}, 0, fast, night, False),
+            ]
+            if not got and not said
+        ],
+        [],
     )
     # No deadline is not a very long one: nothing may cut a blind download
     # short for the time, so the clock is not one of the limits at all.

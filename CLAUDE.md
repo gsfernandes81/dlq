@@ -80,7 +80,7 @@ Decisions that travel with this code — each was arrived at the hard way:
   job firing faithfully onto an empty queue, saying nothing. The Installing
   section of `docs/download-queue.md` explains it.
 
-- **A flick scrolls; only a keypress spends** (2026-08-28). The queue screen
+- **A flick scrolls; only a keypress spends** (2026-08-28). The listing
   takes wheel events — which is what Termux turns a touch drag into — through
   `ytq.enable_touch_scroll`/`ytq.read_wheel` (one copy, in ytq): the cursor
   in the list, the held item's position while moving. Wheels only, on
@@ -174,7 +174,17 @@ Decisions that travel with this code — each was arrived at the hard way:
   allows, just between a different pair of names. The projection assumes
   every firing lands, which is the same bias the README already names for
   the pre-midnight window itself — Doze can still defer a firing the plan
-  counted on.
+  counted on. Two things the line cannot say on its own, and both are said
+  beside it: **the item the line falls inside of** carries `· 46 MiB tonight`
+  on its own row (`_tonight_share`, off the same projection the line is drawn
+  from — one plan per draw, handed to both — and on a line of its own where a
+  phone cannot hold it beside the figures), because a resumable download
+  above the line is not the same thing as one that finishes tonight; and
+  **why there is nothing** is answered from as far up as it goes — a verdict
+  that stops the night, then `_nothing_to_spend` where there is no budget at
+  all, and only then the first item's own refusal, since with nothing to
+  spend every item is refused and the first refusal blames the item for a
+  portal that never answered.
 
 ## Checks
 
