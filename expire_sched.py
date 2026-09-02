@@ -39,7 +39,7 @@ app every ``termux-*`` call hangs rather than failing.
 
 Usage::
 
-    dlq [status|list|ui|path NAME|dest|queue|logs|run-now|arm|cancel]
+    dlq [status|list|ui|path NAME|dest|settings|queue|logs|run-now|arm|cancel]
 
 ``dlq`` with nothing after it is ``dlq ui`` — see :func:`default_action`,
 which falls back to ``status`` when there is no terminal to draw on.
@@ -70,7 +70,9 @@ the fish completions offer.
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
+import errno
 import fcntl
 import json
 import os
@@ -622,6 +624,79 @@ def _lost(noted: list[Path]) -> str:
     return "gone" if all(_readable(path.parent) for path in noted) else "away"
 
 
+@contextlib.contextmanager
+def _shut_out(folder: Path):
+    """A folder that refuses to be read, whoever the checks are running as.
+
+    Not used by the queue: this is the fixture the self-tests at both ends
+    reach for — here for :func:`_readable`, :func:`_is_file`, :func:`_size`
+    and :func:`_lost`, and in ``expire_ui`` for the ``away`` verdict those
+    feed — and it lives beside them, in one copy, because two copies of
+    something this subtle drift and the checks it carries are precisely the
+    ones nobody watches pass.
+
+    The real ``chmod 000`` stays, and as an ordinary user that is all this
+    does: the refusal is the kernel's own, which is the refusal the phone will
+    make when the storage permission is revoked, and a check that has looked
+    at a real closed door is worth more than one told about it.
+
+    Root is the problem. It ignores permission bits, so the mode is set, the
+    door opens anyway, and every check reads the *unlocked* answer and fails —
+    and letting them fail or skipping them there is worse than it sounds,
+    because the container the push gate runs in is root, so the checks that
+    can only pass as an ordinary user are exactly the ones it can never see
+    fail. So the refusal is *probed for* rather than deduced from the uid — no
+    reading of ``geteuid`` tells you what this kernel, filesystem and
+    capability set will actually do — and only if the door is found open are
+    the two calls the helpers reach the disk through stood in for, answering
+    as the kernel would have: ``listdir`` of the folder refused, ``stat`` of
+    anything inside it refused, and ``stat`` of the folder itself still
+    answering, which is what mode 000 really does.
+    """
+    real_listdir, real_stat = os.listdir, os.stat
+    os.chmod(folder, 0)
+    try:
+        try:
+            os.listdir(folder)
+        except OSError:
+            yield  # really shut; there is nothing to stand in for
+            return
+
+        def seen(raw) -> Path | None:
+            """The path a call was given, or None for a file descriptor."""
+            try:
+                return Path(os.fsdecode(raw))
+            except (TypeError, ValueError):
+                return None
+
+        def refuse(path: Path) -> PermissionError:
+            return PermissionError(
+                errno.EACCES, os.strerror(errno.EACCES), str(path)
+            )
+
+        def listdir(path=".", *args, **kwargs):
+            path_seen = seen(path)
+            if path_seen is not None and (
+                path_seen == folder or folder in path_seen.parents
+            ):
+                raise refuse(path_seen)
+            return real_listdir(path, *args, **kwargs)
+
+        def stat(path, *args, **kwargs):
+            path_seen = seen(path)
+            if path_seen is not None and folder in path_seen.parents:
+                raise refuse(path_seen)
+            return real_stat(path, *args, **kwargs)
+
+        os.listdir, os.stat = listdir, stat
+        try:
+            yield
+        finally:
+            os.listdir, os.stat = real_listdir, real_stat
+    finally:
+        os.chmod(folder, 0o755)
+
+
 def _state_items() -> dict:
     """The runner's per-item records, read without importing the runner.
 
@@ -1008,6 +1083,7 @@ VERDICTS = {
     "early": ("waiting for tonight", "37"),
     "late": ("done for tonight", "90"),
     "empty": ("nothing queued", "90"),
+    "off": ("automatic downloads are off", "1;33"),
     "spent": ("no data to spend tonight", "33"),
     "blind": ("PAID: no portal, downloading", "1;33"),
     "no-portal": ("BLOCKED: portal not answering", "1;31"),
@@ -1154,6 +1230,15 @@ def compose_status(
     doc = facts["portal"]
     if verdict == "empty":
         wrapped("ytq or dlq to add something", "90")
+    elif verdict == "off":
+        # The one verdict a reader can undo from the phone in their hand, so
+        # it carries the undoing. The second half is there because the switch
+        # is about the schedule and not about the money, and a screen that
+        # says only "off" reads as a queue that cannot be run at all.
+        wrapped(
+            f"{_me()} settings auto on turns them back on; run-now still works",
+            "90",
+        )
     elif verdict == "stale" and doc:
         wrapped(f"it is {doc['reading']['age_seconds']:.0f}s old", "90")
     # Nothing said here about why the portal is unreachable, or about which of
@@ -1189,6 +1274,12 @@ def compose_status(
         free = doc["free"]["left_bytes"]
         floor = facts["floor_bytes"]
         spendable = facts["spendable"]
+        # The reserve as it applies to tonight, which is not always the
+        # reserve as it is set: with reserve-when-paid off and paid data
+        # behind the free grant, nothing is being kept back, and the line has
+        # to say why — "0 MB is always kept back" is a figure and a lie on the
+        # same line. What it is set to is one command away, in `dlq settings`.
+        waived = facts.get("reserve_waived")
         # Read top to bottom it is the arithmetic the runner does: what is
         # there, what of it dies at the reset, what is held back whatever
         # happens, and so what tonight is allowed to spend. Three numbers with
@@ -1208,9 +1299,9 @@ def compose_status(
             ),
             (
                 f"{floor // 1_000_000} MB",
-                "is always kept back",
-                "always kept back",
-                "90",
+                "waived: paid data is there" if waived else "is always kept back",
+                "waived, paid data" if waived else "always kept back",
+                "33" if waived else "90",
             ),
             (
                 human(spendable),
@@ -1563,6 +1654,174 @@ def set_dest(kind: str, value: str) -> tuple[bool, list[str]]:
         f"{kind} downloads ({FILLED_BY[kind]}) now go to {where}",
         "this applies to what is already queued, not just what you queue next",
     ]
+
+
+# --------------------------------------------------------------------------- #
+# What the queue is allowed to spend
+# --------------------------------------------------------------------------- #
+
+#: What each setting *does*, in the words a change to it is reported in. The
+#: two switches carry both halves, because a switch reads as two different
+#: sentences rather than as one with a word swapped: "the reserve is kept" and
+#: "paid data waives it" are two facts, not one stated twice.
+#:
+#: Keyed by :data:`expire_runner.SETTINGS`, and the self-test pins that it
+#: still is — a setting added to the runner with nothing said about it here
+#: would raise a KeyError on the one line whose whole job is to say what just
+#: happened, which is the trap ``FILLED_BY`` guards for the destinations.
+SETTING_SAYS: dict[str, object] = {
+    "window": "downloads may start {} before the reset",
+    "reserve": "{} is kept back",
+    "reserve-when-paid": (
+        "the reserve is kept even when paid data is there",
+        "paid data waives the reserve",
+    ),
+    "auto": (
+        "the nightly job downloads when the window opens",
+        "the nightly job fires and does nothing; run-now still works",
+    ),
+}
+
+
+def _setting_names() -> str:
+    """``window, reserve, reserve-when-paid or auto`` — the four, in one line.
+
+    Said the same way wherever the four are offered, because a refusal that
+    lists them differently from the screen that lists them reads as two
+    different sets of four.
+    """
+    names = list(_runner().SETTINGS)
+    return ", ".join(names[:-1]) + f" or {names[-1]}"
+
+
+def _setting_said(name: str, value: object) -> str:
+    """The one line saying what *name* is now, spelled as both ends spell it."""
+    spelled = _runner().spell_setting(name, value)
+    says = SETTING_SAYS[name]
+    if isinstance(says, tuple):
+        return f"{name}: {spelled} — {says[0] if value else says[1]}"
+    return f"{name}: {says.format(spelled)}"
+
+
+def show_settings(argv: list[str]) -> int:
+    """Show or set the four things a person may change about the spending.
+
+    How early the queue may start, what may never be spent, whether that
+    reserve still stands when there is paid data behind it, and whether the
+    nightly job downloads at all. They belong to :mod:`expire_runner`, which
+    is where the spec, the parsing and the spelling live: the screen, this
+    command and the firing itself all read them from there, so none of the
+    three can hold its own opinion about what ``2h`` means or about which
+    stored value is nonsense.
+
+    Laid out the way ``dlq dest`` is — the name as a heading with its facts
+    indented under it — for the same reason: on a phone the value and the note
+    behind it do not fit on one line beside a name, and the wrapped remainder
+    of a hung column starts further right than the thing it belongs to.
+    """
+    runner = _runner()
+    paint = _paint()
+    if not argv:
+        width = _width()
+        config = runner.load_config()
+        values = runner.settings()
+
+        def note(text: str, tone: str) -> None:
+            """A line under a setting, wrapped rather than run off the side."""
+            for line in _wrap(text, width - 2):
+                print(f"  {paint(line, tone)}")
+
+        for number, (name, spec) in enumerate(runner.SETTINGS.items()):
+            if number:
+                print()
+            stored = config.get(spec["key"])
+            # A stored value that fails its rule is not the one in force, so
+            # the word under it may not read "set": what is shown above is the
+            # default, and the red line says which value was declined and why.
+            # Reading "set" over the default's figure is the one way this
+            # screen could lie about what tonight is going to do.
+            problem = None if stored is None else runner.setting_problem(name, stored)
+            print(paint(name, "1"))
+            note(runner.spell_setting(name, values[name]), "")
+            where = "set" if stored is not None and not problem else "default"
+            note(f"{where}, {spec['label']}", "90")
+            if problem:
+                note(f"✗ config.json says {stored!r}: {problem}", "31")
+        print()
+        # The command once and the two forms under it, as `dlq dest` prints
+        # them: at 40 columns the command name alone is a third of the line.
+        print(f"{_me()} settings")
+        forms = [("NAME VALUE", "change one"), ("NAME default", "put it back")]
+        form_w = max(len(form) for form, _ in forms)
+        for form, does in forms:
+            print(f"  {form.ljust(form_w)}   {paint(does, '90')}")
+        for line in _wrap(f"NAME is {_setting_names()}", width - 2):
+            print(f"  {paint(line, '90')}")
+        return 0
+
+    name = argv[0]
+    if name not in runner.SETTINGS:
+        print(
+            f"error: {name!r} is not a setting; try {_setting_names()}",
+            file=sys.stderr,
+        )
+        return 2
+    if len(argv) < 2:
+        # A name on its own is somebody halfway through changing it, not
+        # somebody asking what it is: the bare command already answered that,
+        # and guessing which they meant would set nothing while looking as
+        # though it had.
+        print(f"usage: {_me()} settings {name} VALUE", file=sys.stderr)
+        return 2
+
+    # Joined rather than argv[1] alone, so `dlq settings window 45 min` is a
+    # sentence the shell may split and this still reads as one value.
+    worked, lines = set_setting(name, " ".join(argv[1:]))
+    for line in lines:
+        if worked:
+            print(line)
+        else:
+            print(f"error: {line}", file=sys.stderr)
+    return 0 if worked else 1
+
+
+def set_setting(name: str, text: str) -> tuple[bool, list[str]]:
+    """Set *name* to *text*, or back to its default. ``(worked, what to say)``.
+
+    The deciding half of ``dlq settings``, split from the printing half for
+    the reason :func:`set_dest` is: the screen sets these too, and a second
+    place deciding what ``2h`` means is a second answer to it. Nothing here
+    prints or exits — what would have gone to stderr comes back as the last
+    line, and on a success the last line is what the setting *is* now, which
+    is what the screen flashes and what the command prints.
+
+    ``default`` is handled here rather than in
+    :func:`expire_runner.parse_setting`, exactly as it is for the
+    destinations: putting a setting back is *removing* the key, and parsing
+    the word into a value would write today's built-in figure into
+    ``config.json`` as though somebody had chosen it — where it would then
+    outlive any change of mind about what the built-in figure should be.
+    """
+    runner = _runner()
+    if name not in runner.SETTINGS:
+        return False, [f"{name!r} is not a setting; try {_setting_names()}"]
+    config = runner.load_config()
+    key = runner.SETTINGS[name]["key"]
+    if text.strip().lower() == "default":
+        config.pop(key, None)
+        runner.save_config(config)
+        return True, [f"{_setting_said(name, runner.settings()[name])} (the default)"]
+    try:
+        value = runner.parse_setting(name, text)
+    except ValueError as problem:
+        # The runner's own words rather than a second phrasing of them: a
+        # value refused at the prompt and the same value declined out of
+        # config.json have to be complained about identically, or one fault
+        # reads as two.
+        return False, [str(problem)]
+    config[key] = value
+    runner.save_config(config)
+    return True, [_setting_said(name, value)]
 
 
 # --------------------------------------------------------------------------- #
@@ -2012,7 +2271,7 @@ def _fake_facts(verdict: str = "early", **changes) -> dict:
         "detail": verdict,
         "deadline": deadline,
         "window_open": (
-            current if verdict == "blind" else deadline - runner.WINDOW_SECONDS
+            current if verdict == "blind" else deadline - runner.window_seconds()
         ),
         "stop_by": (
             runner.NO_DEADLINE
@@ -2027,7 +2286,9 @@ def _fake_facts(verdict: str = "early", **changes) -> dict:
         "portal_problem": "no credentials: set zwana_username and "
         "zwana_password in ~/zwana-quota/.env (or export them)",
         "spendable": 0 if verdict == "spent" else 480 * 1024 * 1024,
-        "floor_bytes": runner.FLOOR_BYTES,
+        "floor_bytes": runner.floor_bytes(None),
+        "reserve_waived": False,
+        "settings": runner.settings(),
         "bps": 800 * 1024,
         "max_attempts": runner.MAX_ATTEMPTS,
         "items": [],
@@ -2104,7 +2365,14 @@ def _self_test() -> int:
         code = dump()
     said = out.getvalue()
     check("dump finishes", code, 0)
-    for want in ("== environment", "== roots", "== state.json", "== items", "== logs"):
+    for want in (
+        "== environment",
+        "== roots",
+        "== settings",
+        "== state.json",
+        "== items",
+        "== logs",
+    ):
         check(f"dump carries {want}", want in said, True)
     check("dump names the queue root", str(ROOT) in said, True)
     check("dump reports the gate in words", "gate" in said, True)
@@ -2202,11 +2470,12 @@ def _self_test() -> int:
         # has been granted and raises only when something looks inside. If this
         # ever reads "gone", every finished download on the phone is deleted
         # from the queue's memory the first time somebody revokes it.
+        # _shut_out is the chmod, plus what has to stand in for it when the
+        # checks run as root and the kernel lets it through: see its docstring.
         locked = here / "locked"
         locked.mkdir()
         (locked / "film.mp4").write_text("x")
-        os.chmod(locked, 0)
-        try:
+        with _shut_out(locked):
             check(
                 "a folder that is there and unreadable is away",
                 _lost([locked / "film.mp4"]),
@@ -2214,8 +2483,6 @@ def _self_test() -> int:
             )
             check("even though it is a directory", locked.is_dir(), True)
             check("and _readable is what tells them apart", _readable(locked), False)
-        finally:
-            os.chmod(locked, 0o755)
         check(
             "a folder that can be listed can be concluded from", _readable(locked), True
         )
@@ -2223,8 +2490,7 @@ def _self_test() -> int:
         # EACCES through, and this is reached from items(), so one revoked
         # permission would take out every screen the queue has rather than one
         # row on one of them.
-        os.chmod(locked, 0)
-        try:
+        with _shut_out(locked):
             check(
                 "an unreadable file is not an exception",
                 _is_file(locked / "film.mp4"),
@@ -2236,8 +2502,6 @@ def _self_test() -> int:
                 _delivered("50-x.py", {"delivered": [str(locked / "film.mp4")]}),
                 [],
             )
-        finally:
-            os.chmod(locked, 0o755)
 
     # The word the screen reads to decide whether the job is registered. Both
     # ends: "armed, fires every 15m" says yes, and every way of saying no has
@@ -2663,6 +2927,51 @@ def _self_test() -> int:
                     "nothing can be spent" in flying,
                     False,
                 )
+                # The switch is the only verdict whose cause is a thing the
+                # reader themselves set, so the screen reporting it carries
+                # the way back — and says that a person asking still spends,
+                # because "off" otherwise reads as a queue that is stuck.
+                switched = said("off", width)
+                check(
+                    f"an off screen says how to turn them back on at {width}",
+                    "settings auto on" in switched,
+                    True,
+                )
+                check(
+                    f"and that run-now is unaffected at {width}",
+                    "run-now still works" in switched,
+                    True,
+                )
+
+            # A night with the reserve waived is drawn from the same block as
+            # any other, so the figure is the effective floor and the note is
+            # why it is that figure. The failure this pins is "0 MB is always
+            # kept back": a true number with a sentence behind it that is not.
+            for width in (32, 40, 80):
+                drawn = [
+                    line
+                    for line, _ in compose_status(
+                        _fake_facts("go", floor_bytes=0, reserve_waived=True),
+                        width,
+                        plain,
+                    )
+                ]
+                at_most(
+                    f"a waived reserve at {width}",
+                    max(len(line) for line in drawn),
+                    width,
+                )
+                joined = " ".join(line.strip() for line in drawn)
+                check(
+                    f"and it says the reserve is waived at {width}",
+                    "waived" in joined,
+                    True,
+                )
+                check(
+                    f"and never that it is kept back at {width}",
+                    "kept back" in joined,
+                    False,
+                )
 
             # The two screens draw the same downloads. Disagreeing about how
             # far one is would leave nothing to believe: both are measured
@@ -2921,6 +3230,154 @@ def _self_test() -> int:
                     runner.dests()["video"],
                     runner.default_dests()["video"],
                 )
+
+                # The settings, through the one function the command and the
+                # screen both call, on a config.json that is this test's own.
+                # Every setting rather than a chosen sample: each has its own
+                # key, its own parsing and its own words, and the failure
+                # being pinned is per-setting by nature — one that takes on
+                # the screen and is not there when the firing reads it.
+                check(
+                    "every setting says what it does",
+                    sorted(SETTING_SAYS),
+                    sorted(runner.SETTINGS),
+                )
+                typed = {
+                    "window": ("45m", 45),
+                    "reserve": ("150MB", 150),
+                    "reserve-when-paid": ("no", False),
+                    "auto": ("off", False),
+                }
+                check(
+                    "and every setting has a value typed at it here",
+                    sorted(typed),
+                    sorted(runner.SETTINGS),
+                )
+                for name, (text, value) in typed.items():
+                    key = runner.SETTINGS[name]["key"]
+                    worked, said_lines = set_setting(name, text)
+                    check(f"{name} takes a typed value", worked, True)
+                    check(f"and {name} reads back as it", runner.settings()[name], value)
+                    check(
+                        f"and {name} is in config.json",
+                        runner.load_config().get(key),
+                        value,
+                    )
+                    # The last line is what the screen flashes, so it has to
+                    # name the setting and carry its spelling of the value.
+                    check(
+                        f"and the last line says what {name} is now",
+                        (
+                            said_lines[-1].startswith(f"{name}: "),
+                            runner.spell_setting(name, value) in said_lines[-1],
+                        ),
+                        (True, True),
+                    )
+                    worked, said_lines = set_setting(name, "nonsense")
+                    check(f"{name} refuses a value it cannot read", worked, False)
+                    check(
+                        f"and says so about {name} by name",
+                        name in said_lines[-1],
+                        True,
+                    )
+                    # Refusing has to be refusing all the way: a setter that
+                    # writes and then complains leaves the phone spending by a
+                    # figure whose own command said no to it.
+                    check(
+                        f"and nothing is written when {name} is refused",
+                        runner.load_config().get(key),
+                        value,
+                    )
+                    worked, said_lines = set_setting(name, "default")
+                    check(f"{name} can be put back", worked, True)
+                    check(
+                        f"and the key is gone from config.json for {name}",
+                        key in runner.load_config(),
+                        False,
+                    )
+                    check(
+                        f"and {name} reads as the built-in default",
+                        runner.settings()[name],
+                        runner.SETTINGS[name]["default"],
+                    )
+                check(
+                    "a setting nobody has is refused, not created",
+                    set_setting("speed", "9")[0],
+                    False,
+                )
+                check(
+                    "and refusing it wrote nothing",
+                    "speed" in runner.load_config(),
+                    False,
+                )
+
+                # The list, and the usage block it now has a line in. Both are
+                # read on the phone that is doing the spending, so both are
+                # checked at the width that phone actually has.
+                for width in (32, 40, 80):
+                    os.environ["COLUMNS"] = str(width)
+                    with _quiet() as (out, _):
+                        code = show_settings([])
+                    check(f"the settings list comes out at {width}", code, 0)
+                    drawn = out.getvalue().splitlines()
+                    at_most(
+                        f"the settings list at {width}",
+                        max(len(line) for line in drawn),
+                        width,
+                    )
+                    for name in runner.SETTINGS:
+                        check(
+                            f"and {name} is named at {width}",
+                            any(line == name for line in drawn),
+                            True,
+                        )
+                    check(
+                        f"and both forms are shown at {width}",
+                        ("NAME VALUE" in out.getvalue(), "NAME default" in out.getvalue()),
+                        (True, True),
+                    )
+                    with _quiet() as (_, err):
+                        code = usage()
+                    check(f"the usage block is a usage error at {width}", code, 2)
+                    # The table only. The line above it carries the command's
+                    # own name, and the lines below are fixed sentences and a
+                    # path; none of those has ever fitted 32 columns, and the
+                    # one that has to is the list of what can be typed.
+                    table = err.getvalue().split("\n\n")[0].splitlines()[1:]
+                    at_most(
+                        f"the help table at {width}",
+                        max(len(line) for line in table),
+                        width,
+                    )
+                    check(
+                        f"and settings is offered at {width}",
+                        any("settings" in line for line in table),
+                        True,
+                    )
+
+                # A stored value that fails its rule is the default in force,
+                # and the list has to say which value it is declining: the
+                # phone is otherwise spending by a figure that is in the file
+                # and nowhere on the screen.
+                bad = runner.load_config()
+                bad["window_minutes"] = 100
+                runner.save_config(bad)
+                os.environ["COLUMNS"] = "40"
+                with _quiet() as (out, _):
+                    show_settings([])
+                shown = out.getvalue()
+                check(
+                    "an ignored stored value is named",
+                    "100" in shown and "config.json" in shown,
+                    True,
+                )
+                check("and the setting reads as the default", "default" in shown, True)
+                check(
+                    "and the effective value is the built-in one",
+                    runner.settings()["window"],
+                    runner.SETTINGS["window"]["default"],
+                )
+                set_setting("window", "default")
             finally:
                 for name, value in was.items():
                     setattr(runner, name, value)
@@ -2944,6 +3401,7 @@ HELP = (
     ("ui", "change it: reorder, rename, remove, retry, download now"),
     ("path NAME", "where a finished download landed"),
     ("dest", "show or set where finished downloads are put"),
+    ("settings", "show or set the window, the reserve and automatic downloads"),
     ("queue", "just the queued item files"),
     ("logs", "last 40 lines of the runner log"),
     ("dump", "everything a bug report needs, in one paste"),
@@ -3049,6 +3507,31 @@ def dump(target: str | None = None) -> int:
         print(f"  gate       : {root_problem() or 'ok'}")
         print(f"  shebang    : {shebang_problem() or 'ok'}")
 
+    def _settings() -> None:
+        runner = _runner()
+        config = runner.load_config()
+        values = runner.settings()
+        print(f"  {'config.json':<18}: {runner.CONFIG_FILE}")
+        for name, spec in runner.SETTINGS.items():
+            stored = config.get(spec["key"])
+            problem = None if stored is None else runner.setting_problem(name, stored)
+            where = "set" if stored is not None and not problem else "default"
+            spelled = runner.spell_setting(name, values[name])
+            print(f"  {name:<18}: {spelled:<8} ({where})")
+            # The value being declined, not just the fact that one is: a
+            # config.json somebody hand-edited is the reason the phone is
+            # spending a figure nobody recognises, and the value is the
+            # evidence for that.
+            if problem:
+                print(f"    ignoring {stored!r} from config.json: {problem}")
+        # Whether the reserve is standing tonight needs a portal reading, and
+        # a bug report may not go on the network to be written; what is here
+        # is the rule it will be applied by.
+        print(
+            f"  {'reserve, in bytes':<18}: "
+            f"{runner.reserve_bytes():,} when it stands"
+        )
+
     def _state() -> None:
         raw = (ROOT / "state.json")
         if not raw.is_file():
@@ -3110,6 +3593,7 @@ def dump(target: str | None = None) -> int:
 
     guarded("environment", _environment)
     guarded("roots", _roots)
+    guarded("settings", _settings)
     guarded("state.json", _state)
     guarded("items", _items)
     guarded("logs", _logs)
@@ -3234,6 +3718,8 @@ def main(argv: list[str] | None = None) -> int:
         return expire_ui.run()
     elif action == "dest":
         return show_dest(rest)
+    elif action == "settings":
+        return show_settings(rest)
     elif action == "cancel":
         cancel()
     elif action == "logs":

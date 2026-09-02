@@ -3,14 +3,18 @@
 
 The free grant of ~763 MiB lands at 00:00 UTC and whatever is left of it is
 wiped at the next 00:00 UTC. This runner works through scripts dropped in
-``~/dlq/queue`` in the hour before that deadline, so allowance that
-would evaporate gets spent on something asked for instead.
+``~/dlq/queue`` in the hour before that deadline — ``dlq settings window``, an
+hour unless it is told otherwise — so allowance that would evaporate gets spent
+on something asked for instead.
 
 Guarantees, in the order they matter
 ------------------------------------
-1. **At least 100 MB is left afterwards.** Enforced against
-   ``today.remainder_bytes``, which the portal measures exactly, and re-checked
-   live while a download runs — not merely predicted before it starts.
+1. **The reserve is left afterwards.** 100 MB unless ``dlq settings reserve``
+   says otherwise. Enforced against ``today.remainder_bytes``, which the portal
+   measures exactly, and re-checked live while a download runs — not merely
+   predicted before it starts. The one thing that lifts it is being told to:
+   ``settings reserve-when-paid no`` waives it for as long as the reading says
+   paid data is there, which is data the reserve was never protecting.
 2. **Nothing runs past 00:00 UTC.** Enforced by a ``timeout`` wrapper decided at
    spawn, so it holds even if this runner is killed, plus a reaper on the next
    firing for anything that escapes.
@@ -68,8 +72,8 @@ Usage::
 
 Checking it
 -----------
-``python3 expire_runner.py --self-test`` runs 81 offline checks. It takes neither
-the lock nor the heartbeat, so it is safe to run while a firing is live.
+``python3 expire_runner.py --self-test`` runs 130 offline checks. It takes
+neither the lock nor the heartbeat, so it is safe to run while a firing is live.
 
 Two parts are worth not weakening. The **timezone sweep**: the checks pin the
 clock and run either side of the date line. The vessel changes zone and never changes
@@ -147,10 +151,6 @@ HEARTBEAT = ROOT / "heartbeat"
 
 MiB = 1024**2
 
-#: The user's hard floor: this much data must survive the night's downloads.
-#: Stated in decimal MB because that is how the requirement was given.
-FLOOR_BYTES = 100_000_000
-
 #: Extra headroom on the floor. Byte accounting between portal polls is
 #: projected rather than measured, so stopping exactly at the floor would
 #: overshoot it. This is the projection error we are willing to absorb.
@@ -173,9 +173,6 @@ SLICE_MIN_BYTES = 32 * MiB
 
 #: Slices that move essentially nothing, despite being given room and time.
 MAX_STALLS = 3
-
-#: How long before the deadline the queue may start being worked.
-WINDOW_SECONDS = 3600
 
 #: Everything must be dead this long before the deadline, leaving room for the
 #: TERM->KILL escalation to complete before the grant expires.
@@ -276,6 +273,232 @@ def save_config(config: dict) -> None:
     temp = CONFIG_FILE.with_suffix(".tmp")
     temp.write_text(json.dumps(config, indent=2, sort_keys=True), encoding="utf-8")
     temp.replace(CONFIG_FILE)
+
+
+# --------------------------------------------------------------------------- #
+# Settings
+# --------------------------------------------------------------------------- #
+
+
+#: The four things a person may change about how the queue spends, in the order
+#: both front ends list them — so a screen and a command cannot disagree about
+#: what there is to change. They live in the same ``config.json`` the
+#: destinations do, and like the destinations they are read at the moment they
+#: are used rather than captured at import: the screen sets them while a firing
+#: is in progress, and the next reading has to see it.
+#:
+#: ``reserve`` is the user's hard floor — this much data must survive the
+#: night's downloads. 100 MB by default because that is how the requirement was
+#: given, in decimal MB because that is how it was stated. It was a constant
+#: until it stopped being a fact about the phone and became a judgement about
+#: the month; ``dlq settings reserve`` is where it is made now.
+#:
+#: ``window`` is how long before the reset the queue may start being worked. A
+#: multiple of 15 minutes because a firing is a JobScheduler job that lands
+#: about that often, so a window that is not a multiple of one buys nothing.
+#:
+#: The two switches are spelled in their own words rather than in one shared
+#: pair, because that is how each reads out loud: a reserve is kept or it is
+#: not, automatic downloads are on or they are off.
+SETTINGS: dict[str, dict] = {
+    "window": {
+        "key": "window_minutes",
+        "default": 60,
+        "kind": "minutes",
+        "words": None,
+        "label": "how early downloads may start",
+        "min": 15,
+        "max": 1440,
+        "step": 15,
+    },
+    "reserve": {
+        "key": "reserve_mb",
+        "default": 100,
+        "kind": "mb",
+        "words": None,
+        "label": "data kept back, never spent",
+        "min": 0,
+        "max": 100_000,
+        "step": 1,
+    },
+    "reserve-when-paid": {
+        "key": "reserve_when_paid",
+        "default": True,
+        "kind": "bool",
+        "words": ("yes", "no"),
+        "label": "keep it when paid data is there",
+    },
+    "auto": {
+        "key": "auto",
+        "default": True,
+        "kind": "bool",
+        "words": ("on", "off"),
+        "label": "let the nightly job download",
+    },
+}
+
+
+def setting_problem(name: str, raw: object) -> str | None:
+    """Why *raw* cannot be used as *name*, or ``None`` if it can.
+
+    The one judge, asked of a value typed at a prompt and of a value found in
+    ``config.json`` alike — a file that was hand-edited is exactly as likely to
+    hold nonsense as a person is to type it, and two judges would eventually
+    disagree about which nonsense is fine.
+
+    Says what is wrong in the words the setting is set in, because the line
+    goes to whoever typed it and "invalid value" tells them nothing they did
+    not know.
+    """
+    spec = SETTINGS[name]
+    if spec["kind"] == "bool":
+        if isinstance(raw, bool):
+            return None
+        return f"{name} is {spec['words'][0]} or {spec['words'][1]}"
+
+    unit = "minutes" if spec["kind"] == "minutes" else "MB"
+    # bool is an int in Python and True would otherwise read as one minute.
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return f"{name} is a whole number of {unit}"
+    if not spec["min"] <= raw <= spec["max"]:
+        return f"{name} is {spec['min']} to {spec['max']} {unit}"
+    if raw % spec["step"]:
+        return f"{name} is a multiple of {spec['step']} {unit}"
+    return None
+
+
+def settings() -> dict[str, object]:
+    """Every setting's effective value, by name: what is set, or the default.
+
+    **A stored value that fails its rule reads as the default.** It is not an
+    error and it is never half-applied: this is read at the top of a firing
+    nobody is watching, and a ``config.json`` somebody typed a stray character
+    into must not be able to stop a night's downloads or, worse, take out the
+    reserve on the way past. What is ignored is not silent — ``dlq settings``
+    and ``dlq dump`` both name the value they are declining and why.
+    """
+    config = load_config()
+    out: dict[str, object] = {}
+    for name, spec in SETTINGS.items():
+        found = config.get(spec["key"], spec["default"])
+        out[name] = spec["default"] if setting_problem(name, found) else found
+    return out
+
+
+def parse_setting(name: str, text: str) -> object:
+    """Turn typed *text* into a value for *name*, or raise ``ValueError``.
+
+    Generous about how it is written and strict about what it means: the phone
+    keyboard makes ``45m``, ``45 min`` and ``2h`` all likelier than the bare
+    number, and a unit somebody bothered to type should never be the reason a
+    setting does not take. The message on a refusal is the one
+    :func:`setting_problem` would give, so a value typed and the same value
+    found in the config file are complained about in the same words.
+
+    The word ``default`` is *not* handled here: putting a setting back is
+    removing the key, which is the caller's business, and parsing it into a
+    value would write the default in as though it had been chosen.
+    """
+    spec = SETTINGS[name]
+    said = text.strip().lower()
+    if spec["kind"] == "bool":
+        if said in ("on", "yes", "true", "1"):
+            return True
+        if said in ("off", "no", "false", "0"):
+            return False
+        raise ValueError(f"{name} is {spec['words'][0]} or {spec['words'][1]}")
+
+    match = re.fullmatch(
+        r"(\d+)\s*(h|hr|hrs|hour|hours|m|min|mins|minute|minutes)?"
+        if spec["kind"] == "minutes"
+        else r"(\d+)\s*(mb|m)?",
+        said,
+    )
+    if not match:
+        unit = "minutes" if spec["kind"] == "minutes" else "MB"
+        raise ValueError(f"{name} is a whole number of {unit}")
+    value = int(match.group(1))
+    if spec["kind"] == "minutes" and (match.group(2) or "").startswith("h"):
+        value *= 60
+    problem = setting_problem(name, value)
+    if problem:
+        raise ValueError(problem)
+    return value
+
+
+def spell_setting(name: str, value: object) -> str:
+    """How *value* is written wherever it is shown: ``45 min``, ``100 MB``, ``on``.
+
+    One spelling for the screen, the command, the status line and the dump,
+    because a setting that reads ``60`` in one place and ``1h`` in another is
+    two settings as far as anyone reading them is concerned.
+    """
+    spec = SETTINGS[name]
+    if spec["kind"] == "bool":
+        return spec["words"][0] if value else spec["words"][1]
+    return f"{value} min" if spec["kind"] == "minutes" else f"{value} MB"
+
+
+def window_seconds() -> int:
+    """How long before the reset the queue may start being worked, in seconds."""
+    return int(settings()["window"]) * 60
+
+
+def reserve_bytes() -> int:
+    """The configured reserve in bytes — what is kept back, never waived.
+
+    Decimal MB, because the requirement was given in decimal MB and a phone
+    plan is sold in them. This is the figure that was *set*; what applies to a
+    particular reading is :func:`floor_bytes`.
+    """
+    return int(settings()["reserve"]) * 1_000_000
+
+
+def reserve_waived(doc: dict | None) -> bool:
+    """Whether *doc* is a reading the reserve stands aside for.
+
+    Only with ``reserve-when-paid`` set to no **and** the portal saying there
+    is paid data left. Both halves matter: the setting alone waives nothing, or
+    the floor would be gone on the nights it is the only thing left; and paid
+    data alone waives nothing either, since keeping the reserve against it is
+    the default and the whole point of the reserve for most people.
+
+    Asked of the reading in hand rather than of the night, because paid data
+    appears and goes while a download runs — a credit bought at 23:50 waives
+    the reserve from the next poll, and the poll after it says so again.
+    """
+    if settings()["reserve-when-paid"] or not doc:
+        return False
+    # A reading with no paid figure at all is not a reading that says there is
+    # paid data; it is one that has not said. Nothing is waived on a maybe.
+    return int((doc.get("paid") or {}).get("left_bytes") or 0) > 0
+
+
+def floor_bytes(doc: dict | None) -> int:
+    """The reserve that applies to *this* reading: what may not be spent below.
+
+    The figure every guard is enforced against — the budget before a run, the
+    projection between portal polls, and the fresh reading each poll brings —
+    so that all three answer to the same setting and to the same waiver.
+    """
+    return 0 if reserve_waived(doc) else reserve_bytes()
+
+
+def auto_enabled() -> bool:
+    """Whether the nightly job's firings may download.
+
+    Off is a *when* rather than a refusal: the job stays armed and goes on
+    firing, it just does nothing when it does, and ``dlq run-now`` still
+    downloads because a person asking is not the schedule. Nothing about money
+    is decided here — the reserve, the per-item caps and the portal reading go
+    on deciding everything they decided.
+    """
+    return bool(settings()["auto"])
+
+
+# --------------------------------------------------------------------------- #
+# Where downloads go
+# --------------------------------------------------------------------------- #
 
 
 def dests() -> dict[str, Path]:
@@ -481,7 +704,7 @@ def deadlines(doc: dict | None, blind: bool = False) -> tuple[float, float, floa
         deadline = min(deadline, portal_guess)
     if blind:
         return deadline, current, NO_DEADLINE
-    return deadline, deadline - WINDOW_SECONDS, deadline - STOP_MARGIN
+    return deadline, deadline - window_seconds(), deadline - STOP_MARGIN
 
 
 # --------------------------------------------------------------------------- #
@@ -569,9 +792,10 @@ def spendable_bytes(doc: dict) -> int:
 
     Two independent limits, and the smaller wins:
 
-    * ``today.remainder_bytes - floor`` protects the user's 100 MB. The
-      remainder is measured by the portal, so this limit is exact and is the
-      one that carries the guarantee.
+    * ``today.remainder_bytes - floor`` protects the user's reserve, which is
+      100 MB unless ``dlq settings reserve`` says otherwise and is nothing at
+      all on a reading that waives it. The remainder is measured by the portal,
+      so this limit is exact and is the one that carries the guarantee.
     * ``free.left_bytes`` keeps the spending inside the *expiring* allowance
       rather than the paid reserve. It can only over-state, so it is
       discounted: a proportional haircut, plus whatever a stale reading could
@@ -582,7 +806,7 @@ def spendable_bytes(doc: dict) -> int:
     age_penalty = doc["reading"]["age_seconds"] * AGE_BURN_RATE
     from_free = free - haircut - age_penalty
 
-    from_floor = doc["today"]["remainder_bytes"] - FLOOR_BYTES - FLOOR_MARGIN
+    from_floor = doc["today"]["remainder_bytes"] - floor_bytes(doc) - FLOOR_MARGIN
     return int(max(0, min(from_free, from_floor)))
 
 
@@ -932,12 +1156,18 @@ def watch(
     deadline, the interface byte cap, and the ``timeout`` wrapper around the
     child. What the missing half costs is stated where it is agreed to, in
     :func:`blind_budget` and in the question ``dlq`` asks before starting.
+
+    The floor is re-asked of every fresh reading rather than worked out once at
+    the start, because ``reserve-when-paid`` turns on a figure that moves: paid
+    data bought mid-run waives the reserve from that poll on, and paid data
+    spent to nothing puts it back. A floor decided before the first byte would
+    be enforcing an answer to a question nobody asked tonight.
     """
     start_iface = iface_bytes()
     last_portal = now()
     remainder = doc["today"]["remainder_bytes"] if doc else None
     remainder_iface = start_iface
-    hard_floor = FLOOR_BYTES + FLOOR_MARGIN
+    hard_floor = floor_bytes(doc) + FLOOR_MARGIN
     allowance = cap * 1.15 + 8 * MiB
     portal_dark_since: float | None = None
 
@@ -977,6 +1207,7 @@ def watch(
                 portal_dark_since = None
                 remainder = fresh["today"]["remainder_bytes"]
                 remainder_iface = iface_bytes()
+                hard_floor = floor_bytes(fresh) + FLOOR_MARGIN
                 if remainder <= hard_floor:
                     kill_tree(pgid, f"floor reached ({human(remainder)} left)")
                     break
@@ -1123,12 +1354,25 @@ def notify(title: str, content: str) -> None:
 #: Every answer :func:`gate` can give, in the order it checks them. ``go`` and
 #: ``blind`` are the two that download; the rest are why not, and the status
 #: screen says each of them in its own words.
-GATE_STATES = ("empty", "early", "late", "no-portal", "stale", "blind", "spent", "go")
+GATE_STATES = (
+    "off",
+    "empty",
+    "early",
+    "late",
+    "no-portal",
+    "stale",
+    "blind",
+    "spent",
+    "go",
+)
 
 #: The two that are a fault rather than a schedule: nothing is wrong with a
 #: queue that is merely waiting, but a runner that cannot see the portal has
 #: been stopped by something a person may be able to fix. ``blind`` is not one
 #: of them — it is the same missing portal, already answered for by a human.
+#: Neither is ``off``: a switch somebody set is the runner doing as it was
+#: told, and notifying about it nightly would be the fastest way to teach
+#: someone to ignore the one notification that matters.
 GATE_FAULTS = ("no-portal", "stale")
 
 #: The answers that spend. ``blind`` is ``go`` with no reading behind it: the
@@ -1145,6 +1389,7 @@ def gate(
     current: float,
     force: bool = False,
     blind: bool = False,
+    auto: bool = True,
 ) -> tuple[str, str]:
     """Whether a firing would download right now, and the line saying why not.
 
@@ -1157,17 +1402,27 @@ def gate(
 
     The order is the order of the gates, and it is part of the answer: an empty
     queue is reported as an empty queue even when the portal is also down,
-    because that is the one that would have to be fixed first.
+    because that is the one that would have to be fixed first. *auto* is asked
+    ahead of all of them, the empty queue included, because it is the answer to
+    "why did nothing happen tonight" on every night it is off — a screen that
+    says "queue empty" to someone who switched downloading off and forgot has
+    told them the truth about the wrong thing.
 
-    *force* overrides the clock gate and only that. *blind* overrides the two
-    portal gates and only those — it turns "there is no reading, so nothing
-    starts" into "there is no reading, so this is mobile data", which is a
-    thing only a person can decide and is asked for by name. Neither of them
-    reaches the empty queue or the per-item caps. Note where *blind* does
+    *force* overrides the two gates about *when* — the clock and the switch —
+    and nothing else: they are both a schedule, and a person typing
+    ``run-now`` is saying now. *blind* overrides the two portal gates and only
+    those — it turns "there is no reading, so nothing starts" into "there is
+    no reading, so this is mobile data", which is a thing only a person can
+    decide and is asked for by name; it says nothing about the switch, because
+    a missing portal is not a change of mind. Neither of them reaches the empty
+    queue or the per-item caps, and neither reaches the money: the reserve, the
+    budget and the caps decide what they decided. Note where *blind* does
     **not** appear: past the reading it never gets to, since a portal that
     answers is always preferred to guessing, so a blind run that finds the
     portal up is an ordinary run with the ordinary floor still enforced.
     """
+    if not force and not auto:
+        return "off", "automatic downloads are off"
     if not items:
         return "empty", "queue empty"
     if not force and current < window_open:
@@ -1205,7 +1460,9 @@ def snapshot(force: bool = False, blind: bool = False) -> dict:
     flying = blind and not usable(doc)
     deadline, window_open, stop_by = deadlines(doc, flying)
     current = now()
-    verdict, detail = gate(items, doc, window_open, stop_by, current, force, blind)
+    verdict, detail = gate(
+        items, doc, window_open, stop_by, current, force, blind, auto_enabled()
+    )
 
     records = state.get("items", {})
     return {
@@ -1227,7 +1484,14 @@ def snapshot(force: bool = False, blind: bool = False) -> dict:
             if doc
             else 0
         ),
-        "floor_bytes": FLOOR_BYTES,
+        # The reserve as it applies to *this* reading, not as it is set: with
+        # ``reserve-when-paid`` off and paid data there, the floor tonight's
+        # run is flying against is nothing, and a screen still saying 100 MB
+        # would be describing a different night. The setting itself is right
+        # underneath, so both ends can say which of the two they mean.
+        "floor_bytes": floor_bytes(doc),
+        "reserve_waived": reserve_waived(doc),
+        "settings": settings(),
         "bps": state.get("ewma_bps", BOOTSTRAP_BPS),
         "max_attempts": MAX_ATTEMPTS,
         "items": [
@@ -1270,7 +1534,9 @@ def fire(force: bool = False, blind: bool = False) -> int:
     deadline, window_open, stop_by = deadlines(doc, flying)
     current = now()
 
-    verdict, detail = gate(items, doc, window_open, stop_by, current, force, blind)
+    verdict, detail = gate(
+        items, doc, window_open, stop_by, current, force, blind, auto_enabled()
+    )
     if verdict in GATE_FAULTS:
         log(detail)
         return 1
@@ -1519,6 +1785,28 @@ def report(force: bool = False, blind: bool = False) -> int:
 
 
 def _self_test() -> int:
+    """Run the checks against a ``config.json`` of their own.
+
+    Four of the runner's answers are read out of the config file — the window,
+    the reserve, whether the reserve holds against paid data, and whether the
+    nightly job downloads at all — so a developer who has set any of them would
+    get different answers from the same checks, and the push gate would pass or
+    fail depending on whose phone it ran on. The whole run is pointed at an
+    empty file in a temporary directory instead: what is checked is the
+    default, and what a check sets it writes there and throws away.
+    """
+    import tempfile
+
+    saved_config = CONFIG_FILE
+    with tempfile.TemporaryDirectory() as sandbox:
+        globals()["CONFIG_FILE"] = Path(sandbox) / "config.json"
+        try:
+            return _checks()
+        finally:
+            globals()["CONFIG_FILE"] = saved_config
+
+
+def _checks() -> int:
     """Offline checks on the clock. No network, no queue, no Windows host.
 
     The vessel changes timezone regularly — only the zone, never the clock — so
@@ -1527,6 +1815,8 @@ def _self_test() -> int:
     plausible window, just displaced by hours, and the only symptom would be
     downloads starting at the wrong time months later.
     """
+    import tempfile
+
     passed = failed = 0
 
     def check(label: str, got, want) -> None:
@@ -1566,9 +1856,9 @@ def _self_test() -> int:
             "deadline is the next midnight UTC", stamp(deadline), "2026-08-04 00:00:00Z"
         )
         check(
-            "window opens WINDOW_SECONDS before it",
+            "the window opens window_seconds() before it",
             deadline - window_open,
-            WINDOW_SECONDS,
+            window_seconds(),
         )
         check("stop_by leaves STOP_MARGIN", deadline - stop_by, STOP_MARGIN)
         check("the window opens before it stops", window_open < stop_by, True)
@@ -1621,6 +1911,145 @@ def _self_test() -> int:
     check("next_reset stays timezone-aware", reset.tzinfo is not None, True)
     check("and lands on midnight", (reset.hour, reset.minute, reset.second), (0, 0, 0))
 
+    # The settings. Four figures a person may change, read out of config.json
+    # every time they are used rather than captured at import — the screen sets
+    # them while a firing is in flight. What is pinned here is that a value
+    # nobody can honour is *the default*, never an error and never half of one:
+    # this is read at the top of a firing nobody is watching, and a stray
+    # character in a hand-edited file must not be able to take out the reserve.
+    save_config({})
+    check("the window is an hour by default", window_seconds(), 3600)
+    check("the reserve is 100 MB", reserve_bytes(), 100_000_000)
+    check("which paid data does not waive", settings()["reserve-when-paid"], True)
+    check("and the nightly job downloads", auto_enabled(), True)
+    check(
+        "every setting has a value",
+        set(settings()) == set(SETTINGS),
+        True,
+    )
+
+    save_config(
+        {
+            "window_minutes": 120,
+            "reserve_mb": 250,
+            "reserve_when_paid": False,
+            "auto": False,
+        }
+    )
+    check("a window that is set is honoured", window_seconds(), 7200)
+    check("so is a reserve", reserve_bytes(), 250_000_000)
+    check("and the switch", auto_enabled(), False)
+
+    # Each of these is a plausible thing to type into the file by hand: a round
+    # number that is not a step, a word where a number goes, a negative, and a
+    # switch answered in words that are not the switch's.
+    save_config(
+        {
+            "window_minutes": 100,
+            "reserve_mb": -1,
+            "auto": "maybe",
+            "reserve_when_paid": "sometimes",
+        }
+    )
+    check("a window off the 15-minute step falls back", window_seconds(), 3600)
+    check("a negative reserve falls back", reserve_bytes(), 100_000_000)
+    check("a switch that is not one falls back", auto_enabled(), True)
+    check("and so does the other", settings()["reserve-when-paid"], True)
+    save_config({"window_minutes": "abc"})
+    check("a window that is not a number falls back", window_seconds(), 3600)
+    check(
+        "and each one says why it was declined",
+        setting_problem("window", 100),
+        "window is a multiple of 15 minutes",
+    )
+    check("a value that is fine says nothing", setting_problem("window", 45), None)
+    check(
+        "a switch is a switch, not the 1 that is also True",
+        bool(setting_problem("auto", 1)),
+        True,
+    )
+
+    # What may be typed. Generous about the unit, strict about the value: the
+    # phone keyboard makes "45m" likelier than "45", and a unit somebody
+    # bothered to type must never be why a setting does not take.
+    check("a bare number is minutes", parse_setting("window", "45"), 45)
+    check("so is one with the unit on it", parse_setting("window", "45m"), 45)
+    check("and h is hours", parse_setting("window", "2h"), 120)
+    check("MB is optional on the reserve", parse_setting("reserve", "150MB"), 150)
+    check("a switch takes off", parse_setting("auto", "off"), False)
+    check("and yes in any case", parse_setting("reserve-when-paid", "YES"), True)
+
+    def _refused(name: str, text: str) -> bool:
+        """Whether *text* is turned away, which is the only thing checked here.
+
+        The message is :func:`setting_problem`'s, checked above; what matters
+        at this end is that nothing unusable gets through and becomes a value.
+        """
+        try:
+            parse_setting(name, text)
+        except ValueError:
+            return True
+        return False
+
+    check("a window off the step is refused", _refused("window", "20"), True)
+    check("one under the floor is too", _refused("window", "0"), True)
+    check("so is one longer than a day", _refused("window", "1500"), True)
+    check("and one that is not a number at all", _refused("window", "x"), True)
+    check("a reserve of nothing is allowed", parse_setting("reserve", "0"), 0)
+    check(
+        "putting the default back is the caller's word, not a value",
+        _refused("window", "default"),
+        True,
+    )
+
+    # One spelling, wherever it is shown. A setting that reads 60 in one place
+    # and 1h in another is two settings to whoever is reading them.
+    check("the window is spelled in minutes", spell_setting("window", 45), "45 min")
+    check("the reserve in MB", spell_setting("reserve", 100), "100 MB")
+    check("a switch in its own words", spell_setting("auto", False), "off")
+    check("which are not the other's", spell_setting("reserve-when-paid", True), "yes")
+
+    # The waiver. Both halves have to be true, and the reading is what says so:
+    # paid data bought at 23:50 waives the reserve from the next poll, and the
+    # setting on its own waives nothing on a night with no paid data at all.
+    has_paid = {"paid": {"left_bytes": 500 * MiB}}
+    no_paid = {"paid": {"left_bytes": 0}}
+    save_config({})
+    check("the reserve stands over paid data", floor_bytes(has_paid), 100_000_000)
+    check("and over none", floor_bytes(no_paid), 100_000_000)
+    save_config({"reserve_when_paid": False})
+    check(
+        "waived when the setting says so and paid data is there",
+        floor_bytes(has_paid),
+        0,
+    )
+    check("not on the setting alone", floor_bytes(no_paid), 100_000_000)
+    check("and not on a reading there is none of", floor_bytes(None), 100_000_000)
+    check("what was set is still what was set", reserve_bytes(), 100_000_000)
+    check("and the screen can say which night it is", reserve_waived(has_paid), True)
+
+    # And what the waiver is worth, which is exactly the reserve and not a
+    # penny more: the projection margin is error, not money, and stays.
+    spend_doc = {
+        "reading": {"live": True, "age_seconds": 0, "online": True},
+        "free": {"left_bytes": 4000 * MiB, "grant_bytes": 763 * MiB},
+        "today": {"remainder_bytes": 900 * MiB},
+        "paid": {"left_bytes": 500 * MiB},
+    }
+    waived_budget = spendable_bytes(spend_doc)
+    save_config({})
+    check(
+        "waiving the reserve is worth the reserve",
+        waived_budget - spendable_bytes(spend_doc),
+        100_000_000,
+    )
+    check(
+        "and the margin is not part of the bargain",
+        spendable_bytes(spend_doc),
+        900 * MiB - 100_000_000 - FLOOR_MARGIN,
+    )
+    save_config({})
+
     # The gate. One decision with two readers — the firing that acts on it and
     # the status screen that reports it — so what is pinned here is the *order*
     # it answers in. Get that wrong and the screen still says something
@@ -1632,6 +2061,38 @@ def _self_test() -> int:
         "today": {"remainder_bytes": 900 * MiB},
     }
     open_at, stop_at = 1000.0, 4000.0
+    # The switch is the first gate, ahead of the empty queue: "why did nothing
+    # happen tonight" has one answer on every night it is off, and a screen
+    # saying "queue empty" to someone who switched downloading off months ago
+    # has told them the truth about the wrong thing. --force steps over it
+    # because it is a schedule and a person typing run-now is saying now;
+    # --blind does not, because a missing portal is not a change of mind.
+    check(
+        "the switch is asked before anything else",
+        gate([], None, open_at, stop_at, 2000.0, auto=False)[0],
+        "off",
+    )
+    check(
+        "and --force is what steps over it",
+        gate(item, fresh, open_at, stop_at, 500.0, force=True, auto=False)[0],
+        "go",
+    )
+    check(
+        "--blind answers the portal, not the switch",
+        gate(item, None, open_at, stop_at, 2000.0, blind=True, auto=False)[0],
+        "off",
+    )
+    check(
+        "and a switch that is on changes nothing",
+        gate(item, fresh, open_at, stop_at, 2000.0, auto=True)[0],
+        "go",
+    )
+    check("off is a named answer", "off" in GATE_STATES, True)
+    # Nothing is wrong with a runner doing as it was told, so it exits 0 and
+    # says nothing: a nightly notification about a switch somebody set is the
+    # fastest way to teach them to ignore the one that matters.
+    check("and not a fault", "off" in GATE_FAULTS, False)
+    check("nor one that downloads", "off" in GATE_GO, False)
     check(
         "no items is the first answer",
         gate([], None, open_at, stop_at, 0.0)[0],
@@ -1676,7 +2137,7 @@ def _self_test() -> int:
         "go",
     )
     at_floor = json.loads(json.dumps(fresh))
-    at_floor["today"]["remainder_bytes"] = FLOOR_BYTES
+    at_floor["today"]["remainder_bytes"] = reserve_bytes()
     check(
         "including when it says there is nothing to spend",
         gate(item, at_floor, open_at, stop_at, 2000.0, blind=True)[0],
@@ -1717,7 +2178,7 @@ def _self_test() -> int:
     # The floor is the user's guarantee, so a remainder inside it must read as
     # "nothing to spend" and never as a small budget.
     broke = json.loads(json.dumps(fresh))
-    broke["today"]["remainder_bytes"] = FLOOR_BYTES
+    broke["today"]["remainder_bytes"] = reserve_bytes()
     check(
         "the floor leaves nothing to spend",
         gate(item, broke, open_at, stop_at, 2000.0)[0],
@@ -1858,8 +2319,6 @@ def _self_test() -> int:
     # It has to answer, never raise: a photo saved as 20-holiday.png matches
     # the item naming and is not UTF-8, and the exception took the entire
     # night's queue with it — no heartbeat, no log line, nothing to say why.
-    import tempfile
-
     def _write(path: Path, text: str) -> Path:
         path.write_text(text, encoding="utf-8")
         return path

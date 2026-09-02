@@ -97,6 +97,10 @@ HINTS = {
     "queue": "↑↓ scroll   press a key   q back",
     "queue-live": "x stop   ↑↓ scroll   a key   q back",
     "dest": "v video  a audio  f files  q back",
+    # Every setting's key is named here rather than only on the screen: these
+    # are the keys that spend or stop spending, and a key that is only
+    # discoverable by pressing it is not one to leave to a guess.
+    "settings": "w window  r reserve  p paid  a auto  q",
     "confirm": "y do it   any other key: no",
     # With a second answer offered, the hint has to admit it exists: "any other
     # key: no" over a screen showing a b is a screen contradicting itself.
@@ -112,6 +116,10 @@ TIGHT_HINTS = {
     "queue": "↑↓  a key  q back",
     "queue-live": "x stop  a key  q back",
     "dest": "v vid  a aud  f file  q back",
+    # No room for four names and the way out, so the names go: the screen
+    # itself carries each letter beside the setting it sets, and "q back" is
+    # the one thing on this line that must survive the narrow phone.
+    "settings": "press w r p a  q back",
     "confirm": "y do it  else no",
     "confirm-two": "a key above  else no",
     "log": "↑↓ scroll  q back",
@@ -1541,6 +1549,15 @@ def queue_actions(gathered: dict) -> dict[str, str]:
         "a": "armed; register it again" if armed(job) else "arm the nightly job",
         "c": "unregister the job" if armed(job) else "not armed to unregister",
         "w": "where finished files go",
+        # The switch is said on the key that changes it, because this screen is
+        # where somebody wonders why nothing downloaded: a verdict of "off" at
+        # the top and a plain "settings" underneath make the reader hunt for
+        # the connection between them.
+        "s": (
+            "settings: window, reserve"
+            if sched._runner().auto_enabled()
+            else "auto is OFF; settings"
+        ),
         "l": "the runner's log",
     }
 
@@ -1942,6 +1959,14 @@ def _qact_dest(win, paint, queue, gathered) -> tuple[str, bool]:
     return dest_screen(win, paint)
 
 
+def _qact_settings(win, paint, queue, gathered) -> tuple[str, bool]:
+    # `s` on the *list* screen means "the queue screen", so from the list it is
+    # pressed twice to get here. Left as it is on purpose: `s` is the letter
+    # for settings, and the second press is on the screen the settings belong
+    # to rather than on a listing of downloads.
+    return settings_screen(win, paint)
+
+
 def _qact_log(win, paint, queue, gathered) -> tuple[str, bool]:
     path = sched.LOGS / "runner.log"
     if not path.is_file():
@@ -1966,6 +1991,7 @@ QACTS = {
     "a": _qact_arm,
     "c": _qact_cancel,
     "w": _qact_dest,
+    "s": _qact_settings,
     "l": _qact_log,
 }
 
@@ -2047,6 +2073,146 @@ def dest_screen(win, paint: dict) -> tuple[str, bool]:
         flash = said[-1] if said else ""
         if worked:
             _note(f"{picked} downloads now go to {runner.dests()[picked]}")
+            return flash, True
+
+
+#: One key per setting, in :data:`expire_runner.SETTINGS` order, and the same
+#: arrangement :data:`DEST_KEYS` is in for the same reason: a setting added to
+#: the runner and not here would go unreachable rather than raise, since a
+#: short zip is not an error. ``p`` is the reserve-when-*p*aid switch, whose
+#: name is too long to take its own initial twice over.
+SETTING_KEYS = (ord("w"), ord("r"), ord("p"), ord("a"))
+
+
+def settings_lines(width: int) -> list[tuple[int, str, str]]:
+    """The settings screen's body: ``(indent, text, tone)`` per line.
+
+    Pure and separate from the screen that draws it, on this file's rule about
+    layout: what has to be checked is that nothing is clipped at 32 columns,
+    and a curses screen cannot be measured offline. The tones are :data:`TONES`
+    keys so the screen only has to look each one up.
+
+    A stored value that fails its rule is said out loud in red, because the
+    runner's answer to one is to use the default and carry on: silence would
+    leave a ``config.json`` saying 100 minutes over a screen saying 60 with
+    nothing between them to explain it.
+    """
+    runner = sched._runner()
+    config = runner.load_config()
+    values = runner.settings()
+    lines: list[tuple[int, str, str]] = []
+    for letter, (name, spec) in zip(
+        SETTING_KEYS, runner.SETTINGS.items(), strict=False
+    ):
+        if lines:
+            lines.append((0, "", ""))
+        stored = config.get(spec["key"])
+        problem = (
+            runner.setting_problem(name, stored) if spec["key"] in config else None
+        )
+        # The value is on the name's line rather than under it, which is what
+        # keeps four settings on a phone: they are two or three words each,
+        # unlike the destinations' paths, and the four lines a block would
+        # otherwise take put the last setting off the bottom of the screen.
+        head = f"{chr(letter)}  {name}  {runner.spell_setting(name, values[name])}"
+        lines.append((2, _fit(head, width - 4), "head"))
+        # A value that is in the file but is being ignored is not "set": what
+        # is in force is the built-in one, and the red line below says why.
+        note = "set" if spec["key"] in config and not problem else "default"
+        lines += [
+            (5, text, "90")
+            for text in _wrap(f"{note} · {spec['label']}", width - 6, "  ")
+        ]
+        if problem:
+            lines += [
+                (5, text, "31")
+                for text in _wrap(
+                    f"✗ config.json says {stored!r}: {problem}", width - 6, "  "
+                )
+            ]
+    return lines
+
+
+def settings_screen(win, paint: dict) -> tuple[str, bool]:
+    """What the queue may spend and how early — the four things that change it.
+
+    :func:`dest_screen`'s shape, over the settings rather than the
+    destinations, and deciding exactly as little: every value goes through
+    :func:`expire_sched.set_setting`, which is the same function ``dlq
+    settings`` sets through, so a screen and a command cannot disagree about
+    whether a value was taken.
+
+    The two switches flip where they stand — there is nothing to type, and a
+    prompt asking for the word "off" over a screen already showing "on" is a
+    step for nothing. The two numbers open a field with the current number in
+    it, digits only: the unit is the setting's, not something anyone should
+    have to spell, and the note says so along with the way to put the built-in
+    one back.
+
+    A change returns, the way a destination does, so that what it now says
+    lands in the receipts and the queue's own screen is re-read with it in
+    force: turning automatic downloads off changes the verdict at the top of
+    that screen, and it should be seen to.
+    """
+    runner = sched._runner()
+    flash = ""
+    while True:
+        win.erase()
+        height, width = win.getmaxyx()
+        _bar(win, paint, " settings ")
+        line = 2
+        body = settings_lines(width)
+        # The blank lines between the blocks are the first thing given up on a
+        # short screen: a setting that scrolled off the bottom is a setting
+        # nobody knows is there, and `auto` — the one that stops the queue
+        # downloading at all — is the last of the four.
+        if len(body) > height - 6:
+            body = [line_ for line_ in body if line_[1]]
+        for indent, text, tone in body:
+            if line >= height - 4:
+                break
+            attr = paint.get(tone, 0) if tone else 0
+            if tone == "head":
+                attr |= curses.A_BOLD
+            _addstr(win, line, indent, text, attr)
+            line += 1
+        _foot(win, paint, flash, hint("settings", width))
+        win.refresh()
+        key = win.getch()
+        if key in (ord("q"), 27, curses.KEY_LEFT):
+            return flash, False
+        picked = dict(zip(SETTING_KEYS, runner.SETTINGS, strict=False)).get(key)
+        if picked is None:
+            flash = "that key does nothing here" if 32 <= key < 127 else ""
+            continue
+        spec = runner.SETTINGS[picked]
+        value = runner.settings()[picked]
+        if spec["kind"] == "bool":
+            # The word it is *not*, said in the setting's own pair, so the
+            # setter parses exactly what the screen would have printed.
+            worked, said = sched.set_setting(
+                picked, spec["words"][1] if value else spec["words"][0]
+            )
+        else:
+            unit = "Minutes" if spec["kind"] == "minutes" else "MB"
+            steps = f", in steps of {spec['step']}" if spec["step"] > 1 else ""
+            typed = ask(
+                win,
+                paint,
+                f" {picked} ",
+                spec["label"],
+                str(value),
+                f"{unit}{steps}, {spec['min']} to {spec['max']}. ctrl-U clears "
+                "the field. Type default to put the built-in one back.",
+            )
+            if not typed:
+                flash = "left as it was"
+                continue
+            worked, said = sched.set_setting(picked, typed)
+        flash = said[-1] if said else ""
+        if worked:
+            now = runner.spell_setting(picked, runner.settings()[picked])
+            _note(f"{picked} is now {now}")
             return flash, True
 
 
@@ -2555,6 +2721,153 @@ def _self_test() -> int:
                     ],
                     True,
                 )
+
+    # --------------------------------------------------------------- settings
+    # The screen that changes what the queue may spend. Three failures worth
+    # the length of this: a setting the runner grew that no key reaches, since
+    # a short zip leaves it unreachable rather than raising; a line clipped on
+    # a 32-column phone, which is a figure about money going missing; and a
+    # value in config.json that is being ignored with nothing on the screen
+    # saying so, which is a screen and a file disagreeing in silence.
+    runner = sched._runner()
+    check(
+        "every setting has a key to reach it",
+        len(SETTING_KEYS) >= len(runner.SETTINGS),
+        True,
+    )
+    for letter, name in zip(SETTING_KEYS, runner.SETTINGS, strict=False):
+        for span in (80, 32):
+            check(
+                f"and the {name} key is on the settings hints at {span}",
+                f"{chr(letter)} " in hint("settings", span),
+                True,
+            )
+    # Everything below reads a config file of our own. The real one is the
+    # phone's own: a self-test that answers out of it changes its answers the
+    # day somebody sets a reserve, and one that writes it would set one.
+    was_config = runner.CONFIG_FILE
+    try:
+        with tempfile.TemporaryDirectory() as folder:
+            runner.CONFIG_FILE = Path(folder) / "config.json"
+
+            def store(config: dict) -> None:
+                runner.CONFIG_FILE.write_text(json.dumps(config), encoding="utf-8")
+
+            for said, stored in (
+                ("nothing set", {}),
+                ("a window set", {"window_minutes": 120}),
+                ("a window stored that is refused", {"window_minutes": 100}),
+            ):
+                store(stored)
+                for width in (32, 40, 80):
+                    for indent, text, _colour in settings_lines(width):
+                        at_most(
+                            f"a settings line with {said} fits {width} columns",
+                            indent + len(text),
+                            width - 1,
+                        )
+                    blocks = [
+                        tone for _, _, tone in settings_lines(width) if tone == "head"
+                    ]
+                    check(
+                        f"every setting has a block at {width} with {said}",
+                        len(blocks),
+                        len(runner.SETTINGS),
+                    )
+
+            store({})
+            texts = [text for _, text, _ in settings_lines(80)]
+            check(
+                "with nothing set the built-in window is shown",
+                any(runner.spell_setting("window", 60) in text for text in texts),
+                True,
+            )
+            check(
+                "and it says the value is the built-in one",
+                any(text.startswith("default · ") for text in texts),
+                True,
+            )
+            # A setting scrolling off the bottom is the failure this screen
+            # cannot have: `auto` is the last of the four and the one that
+            # stops the queue downloading at all. The blank lines between the
+            # blocks are what the screen gives up first, so what is left has
+            # to fit the shortest phone there is — 20 rows, less the bar, the
+            # flash, the keys and the margins.
+            for width in (32, 40):
+                tight = [line for line in settings_lines(width) if line[1]]
+                at_most(
+                    f"all four settings fit a 20-row phone at {width}",
+                    len(tight),
+                    20 - 6,
+                )
+            store({"window_minutes": 120})
+            texts = [text for _, text, _ in settings_lines(80)]
+            check(
+                "a value that is set is the one shown",
+                any("120 min" in text for text in texts),
+                True,
+            )
+            check(
+                "and it says it was set",
+                any(text.startswith("set · ") for text in texts),
+                True,
+            )
+            # The one the runner is quiet about: it uses the default and does
+            # not raise, so this screen is where the file gets contradicted.
+            store({"window_minutes": 100})
+            drawn = settings_lines(80)
+            texts = [text for _, text, _ in drawn]
+            check(
+                "a refused value falls back to the built-in one",
+                any("60 min" in text for text in texts),
+                True,
+            )
+            check(
+                "and the value being ignored is named",
+                any(text.startswith("✗ config.json says 100") for text in texts),
+                True,
+            )
+            check(
+                "in the colour a problem is said in",
+                {tone for _, text, tone in drawn if text.startswith("✗")},
+                {"31"},
+            )
+            check(
+                "and it is not called set",
+                any(text.startswith("set · ") for text in texts),
+                False,
+            )
+            # The same rule with a problem taking up room: the wrapped red
+            # line may cost the last meaning line, never a setting's name.
+            for width in (32, 40):
+                tight = [line for line in settings_lines(width) if line[1]]
+                named = [tone for _, _, tone in tight[: 20 - 6] if tone == "head"]
+                check(
+                    f"every setting is still named on a 20-row phone at {width}",
+                    len(named),
+                    len(runner.SETTINGS),
+                )
+
+            # The switch is the one setting the queue screen itself has to
+            # admit to: a night that downloaded nothing is explained by it.
+            gathered = {
+                "facts": sched._fake_facts("go", items=sample),
+                "job": armed_job,
+            }
+            store({"auto": False})
+            off = queue_actions(gathered)["s"]
+            store({"auto": True})
+            on = queue_actions(gathered)["s"]
+            check(
+                "the s key says so when automatic downloads are off",
+                "OFF" in off,
+                True,
+            )
+            check("and does not say it when they are on", "OFF" in on, False)
+            for label in (off, on):
+                at_most(f"the s label {label!r} fits a phone", len(label) + 5, 32 - 1)
+    finally:
+        runner.CONFIG_FILE = was_config
 
     # What the run-the-queue confirm says. The same three things the item-level
     # one is checked for: the number is said before it is spent, one key
@@ -3171,9 +3484,11 @@ def _self_test() -> int:
 
         # The gate: a folder that cannot be read is not evidence of anything,
         # and the record is the only thing that knows where the file went.
+        # sched._shut_out is the chmod, plus what has to stand in for it when
+        # the checks run as root and the kernel lets it through — one copy,
+        # beside the helpers it shuts the door on; see its docstring.
         folder = facts["delivered"].parent
-        os.chmod(folder, 0)
-        try:
+        with sched._shut_out(folder):
             rows = sched.items()
             check("an unreadable folder is not a deleted file", forget_gone(rows), [])
             check(
@@ -3181,8 +3496,6 @@ def _self_test() -> int:
                 by_name(rows)["50-gamma.py"]["lost"],
                 "away",
             )
-        finally:
-            os.chmod(folder, 0o755)
         facts["delivered"].unlink()
         check(
             "once it can be read, it can be concluded from",

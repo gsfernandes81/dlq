@@ -1,8 +1,9 @@
 # Queue contract
 
-Scripts here are run by `expire_runner.py` in the hour before 00:00 UTC, to
-spend free data that would otherwise expire. Drop an item in and it runs on the
-next night there is expiring allowance for it.
+Scripts here are run by `expire_runner.py` in the window before 00:00 UTC (an
+hour by default; `dlq settings window` changes it), to spend free data that
+would otherwise expire. Drop an item in and it runs on the next night there
+is expiring allowance for it.
 
 ## Required header
 
@@ -160,9 +161,11 @@ So a plain file URL belongs in `expire_dl` — queue it with `dlq.py`. Use
 
 ## What the runner guarantees whatever an item does
 
-- **≥100 MB left afterwards** — checked against the portal's measured remainder
-  every 60s during a transfer, and projected down between polls using interface
-  counters, which over-count and so err safe.
+- **The configured reserve left afterwards** — 100 MB by default, changed with
+  `dlq settings reserve` and waived (only) when `reserve-when-paid` is `no`
+  and the portal reports paid data left. Checked against the portal's
+  measured remainder every 60s during a transfer, and projected down between
+  polls using interface counters, which over-count and so err safe.
 - **Nothing runs past 00:00 UTC** — a `timeout` wrapper decided at spawn holds
   even if the runner dies, plus a reaper on the next firing.
 - **The paid reserve is never spent** — the budget is capped by the free

@@ -1,15 +1,18 @@
 # dlq — the overnight download queue
 
 The phone's data plan grants free data daily and wipes whatever is unused at
-00:00 UTC. In the hour before that reset, a nightly job spends the leftover on
-downloads queued here — always leaving a floor for the morning and never
-touching the paid reserve. `docs/download-queue.md` is the user guide;
-`queue/README.md` is the item contract.
+00:00 UTC. In the window before that reset (an hour, by default), a nightly
+job spends the leftover on downloads queued here — always leaving a floor for
+the morning (100 MB, by default) and never touching the paid reserve.
+`docs/download-queue.md` is the user guide; `queue/README.md` is the item
+contract.
 
 One command: **`dlq`**. Bare on a terminal it opens the queue's screen; off
 one it prints status. `dlq <url>` queues a plain file URL (until
-2026-08-28 that was a command of its own). Videos are queued by
-[`ytq`](../ytq), which lives in its own repo and writes into this queue.
+2026-08-28 that was a command of its own). `dlq settings` shows and changes
+the window, the reserve, and whether automatic downloads run at all. Videos
+are queued by [`ytq`](../ytq), which lives in its own repo and writes into
+this queue.
 
 ## The three checkouts
 

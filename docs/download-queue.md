@@ -1,9 +1,11 @@
 # The overnight download queue
 
 The data plan grants ~763 MiB of free data a day, and whatever is unused is
-wiped at 00:00 UTC. In the hour before that reset, a scheduled job spends the
-leftover on downloads you queued — always leaving at least 100 MB for the
-morning and never touching the paid reserve.
+wiped at 00:00 UTC. In the window before that reset — an hour by default —
+a scheduled job spends the leftover on downloads you queued — always leaving
+a floor for the morning (100 MB by default) and never touching the paid
+reserve. `dlq settings` changes the window, the floor, or turns the job off
+outright — see [Settings](#settings).
 
 The queue lives in `~/dlq/` — this checkout — and its YouTube front end in a
 sibling checkout, `~/ytq/`. Two commands are installable (see
@@ -221,23 +223,25 @@ last run
 root      ~/dlq
 ```
 
-The first line under the heading is the whole answer, and there are only nine
-of them: **waiting for tonight**, **window open, downloading**, **downloading
-now** (something is being downloaded at this second, by the nightly job or by
-the screen's `n`), **done for tonight**, **nothing queued**, **no
-data to spend tonight**, **PAID: no portal, downloading** (a `--blind` run, on
-mobile data — see [When the portal cannot be
-reached](#when-the-portal-cannot-be-reached)), and the two blocked ones — the
-portal not answering, or its reading being too old to spend against. They come
-from the same function the runner itself gates on, so the screen cannot say one
-thing while the runner does another.
+The first line under the heading is the whole answer, and there are only ten
+of them: **automatic downloads are off** (the `auto` switch — see
+[Settings](#settings), asked before anything else), **waiting for tonight**,
+**window open, downloading**, **downloading now** (something is being
+downloaded at this second, by the nightly job or by the screen's `n`), **done
+for tonight**, **nothing queued**, **no data to spend tonight**, **PAID: no
+portal, downloading** (a `--blind` run, on mobile data — see [When the portal
+cannot be reached](#when-the-portal-cannot-be-reached)), and the two blocked
+ones — the portal not answering, or its reading being too old to spend
+against. They come from the same function the runner itself gates on, so the
+screen cannot say one thing while the runner does another.
 
 The figures under `data` are the arithmetic the runner does, in the order it
-does it: what is left, how much of that dies at the reset, the 100 MB that is
-never spent, and therefore what tonight may use. The speed under them is what
-the last download actually managed, which is what the runner sizes each slice
-against. `try 2/3` on an item means one night already failed and it has two
-left before it is set aside for you.
+does it: what is left, how much of that dies at the reset, the reserve that
+is never spent (100 MB unless `dlq settings` says otherwise), and therefore
+what tonight may use. The speed under them is what the last download actually
+managed, which is what the runner sizes each slice against. `try 2/3` on an
+item means one night already failed and it has two left before it is set
+aside for you.
 
 `dlq status` is read-only and takes no lock, so it answers while a firing is
 in progress. It exits non-zero when it prints a `BROKEN` line.
@@ -318,7 +322,8 @@ remove, put a failed download back, give it its nights back, download one now,
 open a finished one, read its log. There are no commands for those any more —
 each of them is easier to do to a download you are looking at than to a name
 you have to type correctly first. `s` goes one level up, to the queue as a
-whole: the status, the nightly job, the destinations, and running the lot now.
+whole: the status, the nightly job, the destinations, the settings, and
+running the lot now.
 
 The listing picks and the item screen acts. `↑↓` moves, `⏎` opens whatever the
 cursor is on, and every key that changes something is on that second screen,
@@ -435,6 +440,7 @@ scrolling, with the keys that act on the queue as a whole underneath it.
 | `a` | arm the nightly job |
 | `c` | unregister it — asks, because what follows is silence |
 | `w` | where finished downloads go, and change either of them |
+| `s` | the window, the reserve and automatic downloads — see [Settings](#settings) |
 | `l` | the runner's own log |
 
 A bare `dlq` on an empty queue comes here, because "nothing is queued" is only
@@ -449,13 +455,18 @@ read again the moment a run of yours ends.
 
 **`n` here is `dlq run-now`, and it means now.** The nightly window is a
 schedule, not a permission: pressing it ignores the window exactly as the item
-screen's `n` does, and everything else stays — the 100 MB floor, the per-item
-caps, and the portal reading the whole budget is derived from. With the portal
-unreachable it is [a blind run](#when-the-portal-cannot-be-reached) instead,
-which is said on the same screen and asked in the same single question. The
-figure it names is the runner's own; there is no second sum worked out here.
-It runs detached, so the screen stays usable, and `x` stops it — what is
-downloaded is kept and the nightly window carries on from there.
+screen's `n` does, and so does `auto` being off — everything else stays, the
+reserve floor, the per-item caps, and the portal reading the whole budget is
+derived from. With the portal unreachable it is [a blind
+run](#when-the-portal-cannot-be-reached) instead, which is said on the same
+screen and asked in the same single question. The figure it names is the
+runner's own; there is no second sum worked out here. It runs detached, so
+the screen stays usable, and `x` stops it — what is downloaded is kept and
+the nightly window carries on from there.
+
+**`s` here goes one level further, to the settings** — see
+[Settings](#settings) — and its wording says whether `auto` is off, since that
+is the one setting that changes what the rest of the screen means.
 
 ## Where downloads go
 
@@ -504,20 +515,77 @@ granted, card unmounted, disk full — **the file stays in `out/<item>/`**,
 complete and already paid for, with a warning in the log and a notification.
 It is never half-written into a place it cannot go.
 
+## Settings
+
+```
+dlq settings                        # show all four, and what they are set to
+dlq settings window 45              # start downloads 45 min before the reset
+dlq settings window 2h              # ...or say it in hours
+dlq settings reserve 150            # keep 150 MB back instead of 100
+dlq settings reserve-when-paid no   # waive the reserve when paid data is there
+dlq settings auto off               # the nightly job fires and does nothing
+dlq settings window default         # put the built-in default back
+```
+
+Or `s` on [the queue screen](#the-queue-itself) (itself reached with `s` from
+the item list), which shows the same four and takes the same changes: the two
+switches toggle where they sit, and the two numbers open a field, prefilled
+with what they are now — type `default` to put the built-in one back, same as
+on the command line.
+
+| setting              | default | what it does                                     |
+|----------------------|---------|---------------------------------------------------|
+| `window`             | 60 min  | how long before the 00:00Z reset downloads may start — a multiple of 15 minutes, 15 to 1440 |
+| `reserve`            | 100 MB  | data kept back and never spent                     |
+| `reserve-when-paid`  | yes     | keep the reserve even when paid data is on the account; `no` waives it |
+| `auto`               | on      | let the nightly job actually download              |
+
+A value typed as `45`, `45m` or `2h` sets the window; `150` or `150MB` sets
+the reserve; `on`, `off`, `yes`, `no`, `true`, `false`, `1` and `0` all work
+for the two switches, case-insensitively. A value hand-edited into
+`config.json` that does not fit the rule — a window that is not a multiple of
+15, a negative reserve — is never applied: the setting reads as its default
+instead, and `dlq settings` and `dlq dump` both say which stored value they
+declined and why, rather than letting a stray character in a file stop a
+night's downloads.
+
+**`reserve-when-paid no` waives the reserve; it does not lower it or remove
+the guarantee behind it.** With it set to `no`, the runner stops holding the
+configured reserve back on any reading where the portal says paid data is
+left — the free allowance can be spent right down to zero, since paid data is
+there to fall back on. It answers to the reading in hand, not to the night as
+a whole: paid data bought at 23:50 waives the reserve from the next poll on,
+and losing it partway through a run brings the reserve straight back for
+whatever is left to download. Left at the default, `yes`, the reserve is kept
+regardless of what is paid for, which is the point of having one for most
+people.
+
+**`auto off` stops the nightly job from downloading; it does not stop the job
+from running.** The job stays armed and keeps firing every ~15 minutes; each
+firing does nothing, and `dlq status` leads with **automatic downloads are
+off** instead of one of the usual verdicts. `dlq run-now` and the screen's `n`
+still download with the switch off, the same way `--force` still overrides
+the clock: a person asking for a download now is not the schedule, and the
+switch is only ever a schedule. Nothing about money moves with it — the
+reserve, the per-item caps and the portal reading go on deciding exactly what
+they decided with the switch on.
+
 ## Downloading something now
 
 The whole point of the queue is to spend data that is about to be wiped, so
-everything above waits for the last hour of the UTC day. When you need a file
-before then, that is `n` on the item screen — see [Downloading one
-now](#downloading-one-now). `ytq --now URL` is the same thing for something not
-queued yet: pick the format as usual, press `n`, and instead of waiting it
-writes the item and starts it detached, so the screen stays where it was and
-the download reports itself along the bottom. `x` stops it in either.
+everything above waits for the window before the reset (an hour by default —
+`dlq settings window` changes it). When you need a file before then, that is
+`n` on the item screen — see [Downloading one
+now](#downloading-one-now). `ytq --now URL` is the same thing for something
+not queued yet: pick the format as usual, press `n`, and instead of waiting
+it writes the item and starts it detached, so the screen stays where it was
+and the download reports itself along the bottom. `x` stops it in either.
 
-Whatever starts it, the download is outside the expiring window by definition,
-so none of the runner's three guarantees are in play: no 100 MB floor, no
-midnight stop, no cap against the free allowance. What is on the screen before
-it starts is the number it may spend, and whether anything is counting it.
+Whatever starts it, the download is outside the expiring window by
+definition, so none of the runner's three guarantees are in play: no reserve
+floor, no midnight stop, no cap against the free allowance. What is on the
+screen before it starts is the number it may spend, and whether anything is
+counting it.
 
 Everything else is kept. It downloads into the same place the nightly job
 would, so stopping it is safe: what is downloaded stays, the item stays queued,
@@ -584,17 +652,22 @@ instead of one.
 
 ## What to expect
 
-- Nothing runs before the last hour of the UTC day. Firings come every ~15
-  minutes and each works for at most ~9 minutes — Android's limit, not a bug.
+- Nothing runs before the window opens — an hour before the reset unless
+  `dlq settings window` says otherwise. Firings come every ~15 minutes and
+  each works for at most ~9 minutes — Android's limit, not a bug.
 - Big files span nights. Both `dlq` and `ytq` items resume from where they
   stopped; a multi-GB file finishing over several nights is normal.
 - Items run in name order: the `NN-` prefix is the priority, lower first. The
   head of the queue takes what it can and the remainder flows down.
-- Guarantees, whatever an item does: ≥100 MB of today's data is left, nothing
-  runs past 00:00 UTC, and the paid reserve is never spent. All three are
-  measured against the portal, so all three are off for the two things that
+- Guarantees, whatever an item does: the configured reserve is left
+  afterwards (100 MB unless changed, waived only if `reserve-when-paid` is
+  `no` and paid data is there — see [Settings](#settings)), nothing runs past
+  00:00 UTC, and the paid reserve is never spent. All three are measured
+  against the portal, so all three are off for the two things that
   deliberately spend paid data and say so first — `dlq ui`'s `n` and
   `dlq run-now --blind`.
+- `dlq settings auto off` leaves all of the above scheduled but idle: the job
+  still fires, it just downloads nothing until a person asks for it by name.
 
 ## When something looks wrong
 

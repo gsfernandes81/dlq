@@ -105,6 +105,28 @@ Decisions that travel with this code — each was arrived at the hard way:
   import ytdl_item off the queue root, the real module moved to the ytq
   checkout, and the shim replaces itself in `sys.modules` with the real one —
   it can go when the last pre-split item is gone.
+- **`dlq settings` / `s` on the queue screen** (2026-09-02): the window, the
+  reserve, `reserve-when-paid` and `auto` live in `config.json` beside the
+  destinations, and are read at the moment they are used, never cached —
+  `expire_runner.SETTINGS` is the one spec, and both front ends read it
+  through the runner rather than keeping a second copy of the names, the
+  defaults or the rules. **`off` is the first thing `gate()` asks**, ahead of
+  the empty queue, because it is the answer to "why did nothing happen
+  tonight" on every night it is off; `run-now`'s `--force` steps over it
+  exactly as it steps over the clock, because the switch is a *when*, not a
+  guard over money — the reserve, the per-item caps and the portal reading
+  answer to nobody's `--force`. A value found in `config.json` that fails its
+  rule reads as the default rather than raising: this is read at the top of a
+  firing nobody is watching, and a stray character typed into the file must
+  not be able to stop a night's downloads or take out the reserve on its way
+  past — `dlq settings` and `dlq dump` name what they declined instead. The
+  reserve is waived on `paid.left_bytes > 0`, never on a threshold, because
+  `paid.left_bytes` can only understate what is actually paid for while
+  `free.left_bytes` can only overstate what is actually free — "there is paid
+  data" is the one direction that reading cannot be wrong about, so it is the
+  only question the waiver asks. And the window is a multiple of 15 minutes
+  because that is JobScheduler's own floor for a periodic job — a window that
+  is not a multiple of one would buy nothing beyond the nearest firing below it.
 
 ## Checks
 
