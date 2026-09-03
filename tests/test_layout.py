@@ -268,6 +268,54 @@ def test_the_settings_page_fits_and_keeps_every_row(dlq, width):
 
 
 @pytest.mark.parametrize("width", WIDTHS)
+def test_the_settings_page_gives_things_up_in_one_order(dlq, width):
+    """Blank lines first, then the grey meanings, and the said area last.
+
+    Never a setting's name, its value, or a red line naming a stored figure
+    that is being ignored: a row nobody knows is there is a setting nobody
+    knows is there, and the last of the six sits under the switch that stops
+    the queue downloading at all. The said area goes *after* the meanings
+    rather than before them because it is the reason the page stayed — giving
+    it up first would leave the phone that most needs the sentence the one
+    screen that never shows it.
+
+    Asserted over the whole sweep rather than at one height: what is pinned is
+    that no height exists where a later thing has gone while an earlier one is
+    still there.
+    """
+    job = [("nightly job", "armed, fires every 15m", "32")]
+    said = "auto: off - the nightly job fires and does nothing; run-now still works"
+    heads = None
+    for height in range(34, 11, -1):
+        body = dlq.ui.settings_body(width, height, job, said)
+        blanks = sum(1 for _, text, _ in body if not text)
+        grey = sum(1 for _, _, tone in body if tone == "90")
+        told = sum(1 for _, _, tone in body if tone == dlq.ui.SAID_TONE)
+        rows = [text for _, text, tone in body if tone == "head"]
+
+        if heads is None:
+            heads = rows
+            assert told, "the sentence has to be there to be given up"
+        # Every row survives every height. This is the one that must not vary.
+        assert rows == heads, height
+        # And the order of what does not: nothing later goes while something
+        # earlier is still on the page.
+        assert not (grey == 0 and blanks), height
+        assert not (told == 0 and grey), height
+        # It is cut *to the screen*: either it fits, or there is nothing left
+        # that may be given up. A page cut to a screen taller than the one in
+        # somebody's hand still scrolls a setting off the bottom of it.
+        floor = len(
+            [
+                line
+                for line in dlq.ui.settings_lines(width, job)
+                if line[1] and line[2] != "90"
+            ]
+        )
+        assert len(body) <= max(height - 6, floor), height
+
+
+@pytest.mark.parametrize("width", WIDTHS)
 def test_the_key_hints_fit_and_always_say_the_way_out(dlq, width):
     """The hints are the line that must never be the one clipped.
 

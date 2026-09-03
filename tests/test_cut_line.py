@@ -90,6 +90,83 @@ def test_a_night_that_reaches_everything_still_gets_a_line(dlq):
     assert entries[-1][1] == [ruled]
 
 
+def test_a_night_that_reaches_only_the_first_download_still_falls_under_it(dlq):
+    """The line is a *position*, and nought is a position like any other.
+
+    Read as "no position at all", a night that finishes exactly one download
+    would draw the line above it and say nothing goes tonight — over a row
+    that does, on the screen the night's spending is judged from.
+    """
+    three(dlq, caps=(100 * MiB, 4 * GiB, 4 * GiB))
+    facts = facts_for(dlq, free=300 * MiB)
+    order = order_of(dlq, facts)
+    planned = dlq.ui.tonight_plan(order, facts)
+    got = {entry["name"]: entry["bytes"] for entry in planned}
+    assert got["10-one.py"] and not got["20-two.py"] and not got["30-three.py"]
+
+    reaches, ruled = dlq.ui.cut_index(order, facts, 40, planned)
+    assert reaches == 1
+    # And it is the line that says how much, not the one that says none.
+    assert dlq.ytq.human(100 * MiB) in ruled
+
+
+def test_the_projection_is_the_runners_own_over_the_runners_own_figures(dlq):
+    """The whole safety of the line: the screen computes none of it.
+
+    Every figure ``plan`` is given comes off the snapshot the status screen was
+    drawn from — the budget, the measured rate, the working time, whether this
+    is a blind night, and the disk. A front end that passed its own idea of any
+    of them would draw a line the runner then refuses, which is the one thing
+    this exists to prevent.
+    """
+    for number, name in ((10, "one"), (20, "two"), (30, "three")):
+        dlq.item(f"{number}-{name}.py", cap=2 * GiB, desc=name)
+
+    nights = [
+        # An ordinary night, a blind one, and one with no disk to put it on.
+        facts_for(dlq),
+        dlq.facts(portal=None, blind=True, force=True),
+        facts_for(dlq, free_disk=0),
+    ]
+    assert nights[1]["blind"] is True
+    assert {night["blind"] for night in nights} == {True, False}
+
+    for facts in nights:
+        order = order_of(dlq, facts)
+        known = {item["name"]: item for item in facts["items"]}
+        assert dlq.ui.tonight_plan(order, facts) == dlq.runner.plan(
+            [known[name] for name in order],
+            {},
+            facts["spendable"],
+            facts["bps"],
+            facts["night_seconds"],
+            facts["blind"],
+            facts["free_disk"],
+        ), facts["verdict"]
+
+
+def test_the_row_the_line_falls_inside_of_says_how_much_of_it_goes_tonight(dlq):
+    """The one row the line cannot speak for on its own.
+
+    A resumable download handed whatever is left of the budget sits *above* the
+    line, correctly — it does get bytes tonight — but read exactly like the
+    ones that finish. Nothing for an item the night finishes and nothing for
+    one it never reaches, because on those the figure is the progress cell's
+    own number said twice.
+    """
+    share = dlq.ui._tonight_share
+    row = {"cap": 200 * MiB, "have": 0}
+    assert share(row, 46 * MiB) == f"{dlq.ytq.human(46 * MiB)} tonight"
+    # It finishes tonight: the line above it has already said so.
+    assert share(row, 200 * MiB) == ""
+    assert share(row, 300 * MiB) == ""
+    # It is not reached at all: the line below it has already said so.
+    assert share(row, 0) == ""
+    # And what is left to fetch is what is left, not what was declared.
+    assert share({"cap": 200 * MiB, "have": 180 * MiB}, 20 * MiB) == ""
+    assert share({"cap": 200 * MiB, "have": 180 * MiB}, 5 * MiB)
+
+
 def test_no_reading_yet_means_no_line_at_all(dlq):
     """An honest listing with no line beats a line drawn from figures nobody
     has."""

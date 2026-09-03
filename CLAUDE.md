@@ -271,6 +271,7 @@ One file per guarantee, and each says which:
 | `test_layout.py` | every line fits, at 32, 40, 80 and swept between |
 | `test_cli.py` | what a bare `dlq` does, and where each word goes |
 | `test_item_contract.py` | every way an item can fail to declare itself is a reason and never an exception |
+| `test_in_flight.py` | the guards that act while the bytes are moving: the byte cap, the floor, the deadline, a portal gone dark |
 | `test_dump.py` | `dlq dump` finishes on the broken trees it exists for |
 | `test_screens.py`, `test_settings_screen.py` | the two screens, on a pty |
 
@@ -290,6 +291,83 @@ a message reworded, which this suite declines to pin on purpose — so
 does. It is out of `make test` and out of the pre-push hook because it takes
 hours, and a push here is a deploy.
 
+**Where the score stands, and what is left in it.** Scoped runs, one module
+against the tests that reach it, on two workers (2026-09-03):
+
+| module | mutants | score | wall clock |
+|---|---|---|---|
+| `expire_runner.py` | 2045 | 55.2% → **60.4%** | ~26 min at four workers, ~48 at two |
+| `expire_sched.py` | 2895 | **38.4%** | ~83 min |
+| `expire_ui.py` | 2845 | **38.4%** | ~82 min |
+
+Every one of those figures is a **lower bound on what the whole run would
+say**: a scoped run puts each mutant to a subset of the suite, and `make
+mutants` puts every mutant to all of it. `--fail_under` is therefore left
+where it is until a whole run has actually been timed — a ratchet notch set
+from a scoped number is a notch nobody has proved.
+
+Every survivor of the runner's run was read. They fall into five heaps and
+only the first was acted on:
+
+* **A guard nothing was checking.** `watch()` — the interface cap, the floor
+  projected between polls, the floor re-asked of every fresh reading, the
+  deadline, and the timer on a portal gone dark — was never called by a test
+  at all. It is the only guard that acts while the bytes are moving, and it is
+  the last thing between a runaway `yt-dlp` and the reserve; it has a file of
+  its own now. Beside it: the night's budget coming down as items spend it and
+  never going up when a fresh reading says there is more; the discount on the
+  expiring allowance; a whole item admitted only if it finishes with time to
+  spare, finished once, and not offered again; an item's own refusal not
+  stopping the queue behind it; a stall that is not a strike and a strike that
+  is not the last one. In `expire_sched`: **nothing spends without a yes**, and
+  what `dlq now` says it will spend is what is left to fetch rather than the
+  whole declaration.
+* **A message reworded.** The largest heap by far — a third of the runner's
+  survivors and better than half of `expire_sched`'s sit on a line that is a
+  log line, a refusal, a notification or a drawn row. What a refusal *says* is
+  free to improve, and a test that fails when it does is a test that has to be
+  rewritten to say the same thing again. Where the sentence *is* the behaviour
+  — `admit`'s refusal, quoted on the cut line — what is pinned is that there is
+  one and that it is the same one.
+* **Cosmetic.** A colour code, a column width, a label that shortens on a
+  phone. `test_layout.py` pins that every line *fits*; which of two spellings
+  it fits with is the layout's business.
+* **Equivalent in effect.** `>` against `>=` where nothing lands on the
+  boundary; a byte either side of a hundred-megabyte reserve; a second either
+  side of a five-minute timer; a `break` that becomes a `continue` in a loop
+  whose next test is the one that just fired; a default argument value every
+  caller passes explicitly; a poll cadence, which costs a wakeup and decides
+  nothing.
+* **Out of that run's reach.** `read_status`'s clamp is pinned by
+  `test_downloader.py` and `snapshot`'s row fields by `test_listing.py` and
+  `test_cut_line.py`, neither of which is in the runner's scoped set. They are
+  survivors of the *scope*, not of the suite — which is the other reason a
+  scoped score reads low.
+
+The two front ends read the same way and sit lower for the reason they should:
+they are mostly presentation, and presentation is the heap this suite declines
+to pin. Better than a third of `expire_sched`'s survivors and better than a
+third of `expire_ui`'s are on a line that is a printed message or a drawn row,
+and `String` alone is the largest mutator in both. What was worth taking out of
+them was the handful of lines that decide money or lose bytes: **nothing spends
+without a yes** and the figure `dlq now` quotes is what is *left* to fetch; a
+download's bytes on disk are every payload file added up; a destination that
+exists is used and a missing parent is refused; the status screen's reserve line
+is the reserve that applies tonight, and a waived one does not read the same as
+a reserve of nothing. On the screens: the cut line falls *under* a night that
+reaches exactly one download; the row the line falls inside of says how much of
+it goes tonight and the rows either side say nothing; the projection is the
+runner's own over the snapshot's own figures, blind flag and free disk included;
+and the settings page is cut to the screen it is drawn on, giving up the blanks,
+then the meanings, then the sentence, and never a row.
+
+`expire_ui`'s remaining survivors cluster in `draw_list`, `confirm`, `ask` and
+`run_now` — the curses screens, whose event loops are fenced but whose drawing
+is not, and which are checked under a pty instead. `_reindex`'s cluster is its
+parking path and its `# pragma: no cover` guard: the orders it produces are
+pinned by a property test over random sequences of moves, and what survives
+inside it is set algebra that a two-item cycle cannot tell apart.
+
 The whole run is the ratchet; the way to get an *answer* about one module is a
 scoped one, because the command is run once per mutant and most of the suite
 does not touch most of the code. `POODLE_TESTS` narrows it, and pairs with
@@ -299,6 +377,22 @@ poodle's own `--only`:
 POODLE_TESTS="tests/test_gate.py tests/test_tonight_budget.py" \
     uv run --group mutants poodle --only expire_runner.py
 ```
+
+The three the figures above came from, so the next run is the same run:
+
+```
+POODLE_TESTS="tests/test_gate.py tests/test_tonight_budget.py tests/test_firing.py
+              tests/test_settings.py tests/test_clock.py tests/test_item_contract.py
+              tests/test_in_flight.py"                      --only expire_runner.py
+POODLE_TESTS="tests/test_settings.py tests/test_listing.py tests/test_cli.py
+              tests/test_dump.py tests/test_layout.py"      --only expire_sched.py
+POODLE_TESTS="tests/test_ui_moves.py tests/test_cut_line.py
+              tests/test_layout.py"                         --only expire_ui.py
+```
+
+`test_settings_screen.py` is deliberately not in the third of those: it is a
+pty test, it is a large share of the suite's wall clock, and what it drives is
+the fenced event loop rather than anything a mutant reaches.
 
 Same mutants, same verdicts, a fraction of the wall clock — and a survivor
 list short enough to read.
