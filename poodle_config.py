@@ -95,7 +95,11 @@ file_copy_filters = [
 min_timeout = 120
 timeout_multiplier = 10
 
-max_workers = 4
+#: Two of the four cores, so the machine — and the phone this runs on — stays
+#: usable while a run is going. A mutation run is hours of wall clock either
+#: way; taking every core to shorten it is the wrong trade for a job that is
+#: deliberately not on the critical path of anything.
+max_workers = 2
 
 #: Which tests each mutant is put to. The whole suite by default, minus the pty
 #: tests — the code those drive is fenced out of mutation anyway, and they are
