@@ -34,17 +34,32 @@ beside its own repo, then under `~`. The phone keeps all three under `~`.
 
 ## Checks
 
-`make dev` (`uv sync`, once, networked) puts the locked pytest into `.venv`;
-then `make test` or `make check` — both are `.githooks/checks.sh`, the one
-copy of what runs (pytest through `.venv` when there is one, plain `python3
--m pytest` otherwise), and the pre-push hook
+`make dev` (`uv sync`, once, networked) puts the locked pytest, pyte and
+hypothesis into `.venv`; then `make test` or `make check` — both are
+`.githooks/checks.sh`, the one copy of what runs (pytest through `.venv` when
+there is one, plain `python3 -m pytest` otherwise), and the pre-push hook
 (`git config core.hooksPath .githooks`, once per clone) refuses a push that
-fails it. The tests need the sibling checkouts present. They are offline: no
-network, no scheduler, no portal.
+fails it. Half a minute, offline: no network, no scheduler, no portal.
 
-The per-module `--self-test` checks were removed on 2026-09-02; the pytest
-suite that replaces them is being written. Until it lands `tests/` is empty
-and the gate says "no tests yet" rather than blocking a push.
+The suite builds its own queue root under a temporary directory and points
+`EXPIRE_HOME` and `HOME` at it, so it never reads or writes the queue this
+checkout is managing — and with no credentials under that `HOME` the portal is
+never called at all. It needs the sibling checkouts present, because the
+modules import across them the same way a real run does. The two screens are
+opened on a pty and read back through a terminal emulator, which is the only
+way a screen's failures show at all.
+
+`make mutants` is the suite's own check: [poodle](https://poodle.readthedocs.io)
+changes one operator, literal or comparison at a time and re-runs the tests, and
+a mutant that survives is a line no test was actually asserting anything about.
+It takes hours, so it is deliberately outside `make test` and the pre-push hook,
+and it is a ratchet rather than a gate — `--fail_under` sits under the score
+already reached and goes up when the score does. `poodle_config.py` says how it
+is arranged and why.
+
+Two failures that are not regressions: a long checkout path (the front ends
+check that every line fits 32 columns, and the root is on the status screen),
+and a missing sibling checkout.
 
 ## Migrating from or3 (one-time, on the phone)
 

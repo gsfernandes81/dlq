@@ -17,3 +17,8 @@ config.json
 # uv-managed dev environment (make dev)
 .venv/
 .pytest_cache/
+.hypothesis/
+
+# make mutants: poodle's per-worker copies of the tree, and its report
+.poodle-temp/
+.poodle-report.json

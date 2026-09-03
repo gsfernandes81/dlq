@@ -19,23 +19,17 @@ which is exactly what was right about the old code while the screen was wrong.
 
 from __future__ import annotations
 
-import contextlib
-import fcntl
-import os
-import pty
-import select
-import shutil
-import struct
 import sys
-import termios
-import time
 from pathlib import Path
 
-import pyte
 import pytest
 
+from _pty import ENTER, drive, make_root, row_for  # noqa: F401  (ENTER: keys)
+
 # The queue's modules are flat siblings at the checkout root, not a package —
-# the items in queue/ import them by bare name and so does this.
+# the items in queue/ import them by bare name and so does this. What is
+# imported here is the checkout's own copy, and only for the two pure layout
+# functions below; the screen half runs against a copy under a temporary root.
 REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
@@ -139,156 +133,19 @@ ITEMS = {
     ),
 }
 
-#: The modules a queue root needs to run its own screen out of.
-MODULES = (
-    "dlq.py",
-    "expire_dl.py",
-    "expire_runner.py",
-    "expire_sched.py",
-    "expire_ui.py",
-    "ytdl_item.py",
-)
-
-
-class Term(pyte.Screen):
-    """pyte, plus the two sequences ncurses scrolls a region with.
-
-    ``CSI S`` and ``CSI T`` are how ncurses reuses lines that only moved, and
-    pyte answers neither: fed a real redraw without them its screen keeps text
-    the terminal has already scrolled away, and the test reads a page that no
-    terminal ever showed. Both are :meth:`index` and :meth:`reverse_index`,
-    which pyte does have and which honour the margins ncurses just set.
-    """
-
-    def scroll_up(self, count: int | None = None) -> None:
-        for _ in range(count or 1):
-            self.index()
-
-    def scroll_down(self, count: int | None = None) -> None:
-        for _ in range(count or 1):
-            self.reverse_index()
-
-
-pyte.Stream.csi["S"] = "scroll_up"
-pyte.Stream.csi["T"] = "scroll_down"
-
 
 def _checkout(tmp_path: Path) -> Path:
-    """A queue root of this checkout's own modules, with three things queued."""
-    root = tmp_path / "expire"
-    root.mkdir()
-    for name in MODULES:
-        shutil.copy(REPO / name, root / name)
-    for sub in ("queue", "done", "failed", "work", "out", "logs"):
-        (root / sub).mkdir()
-    # The one file `dlq status` proves a queue root by, so the screen opens.
-    shutil.copy(REPO / "queue" / "README.md", root / "queue" / "README.md")
-    for name, text in ITEMS.items():
-        (root / "queue" / name).write_text(text, encoding="utf-8")
+    """A queue root of this checkout's own modules, with three things queued.
+
+    ``auto`` is stored off, so the switch the screen flips has somewhere to
+    flip to and the listing behind it is not waiting on a portal to say so.
+    """
+    root = make_root(tmp_path, ITEMS)
     (root / "config.json").write_text('{\n  "auto": false\n}\n', encoding="utf-8")
     return root
 
 
-def _env(root: Path, home: Path, cols: int, rows: int) -> dict[str, str]:
-    """The child's environment: this checkout's siblings, and no portal.
-
-    The siblings are named outright rather than left to be found, because
-    ``EXPIRE_HOME`` moves the queue root and the "beside this one" answer moves
-    with it — the copy under a temporary directory has no ytq beside it. They
-    are the checkouts this suite itself imported, so the screen under test is
-    running against the same code the test is reading.
-
-    ``HOME`` is the temporary directory and the two credential variables are
-    unset, which is the whole of what keeps this offline: ``zwana_quota``'s
-    ``.env`` lives under ``HOME``, and with no credentials anywhere the portal
-    is never called at all. The screen says so at the top and goes on working,
-    which is the phone off the vessel's wifi.
-    """
-    env = dict(os.environ)
-    env.update(
-        {
-            "EXPIRE_HOME": str(root),
-            "YTQ_HOME": str(Path(expire_ui.ytq.__file__).resolve().parent),
-            "ZWANA_HOME": str(expire_ui.sched._zwana_root()),
-            "HOME": str(home),
-            "TERM": "xterm-256color",
-            "LINES": str(rows),
-            "COLUMNS": str(cols),
-            "ESCDELAY": "25",
-        }
-    )
-    for name in ("zwana_username", "zwana_password"):
-        env.pop(name, None)
-        env.pop(name.upper(), None)
-    return env
-
-
-def _drive(
-    root: Path, home: Path, cols: int, rows: int, keys: list[bytes]
-) -> tuple[list[list[str]], bytes]:
-    """Open the screen on a pty and press *keys*, one at a time.
-
-    Returns the display after each keypress — the opening screen first — and
-    the raw bytes the last one produced, which is where the receipts land once
-    curses has been torn down.
-    """
-    screen = Term(cols, rows)
-    stream = pyte.ByteStream(screen)
-    pid, fd = pty.fork()
-    if pid == 0:  # pragma: no cover - the child is replaced immediately
-        os.chdir(root)
-        os.execve(
-            sys.executable,
-            [sys.executable, str(root / "expire_sched.py"), "ui"],
-            _env(root, home, cols, rows),
-        )
-    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
-
-    raw: list[bytes] = []
-
-    def settle(quiet: float, limit: float = 8.0) -> None:
-        """Read until the screen has been still for *quiet* seconds."""
-        end = time.time() + limit
-        last = time.time()
-        while time.time() < end and time.time() - last < quiet:
-            ready, _, _ = select.select([fd], [], [], 0.05)
-            if not ready:
-                continue
-            try:
-                data = os.read(fd, 65536)
-            except OSError:
-                return
-            if not data:
-                return
-            raw.append(data)
-            stream.feed(data)
-            last = time.time()
-
-    shots: list[list[str]] = []
-    try:
-        settle(1.0)
-        shots.append([line.rstrip() for line in screen.display])
-        for key in keys:
-            raw.clear()
-            os.write(fd, key)
-            settle(0.7)
-            shots.append([line.rstrip() for line in screen.display])
-    finally:
-        with contextlib.suppress(OSError):
-            os.kill(pid, 9)
-        os.waitpid(pid, 0)
-        os.close(fd)
-    return shots, b"".join(raw)
-
-
-def _row(shot: list[str], letter: str) -> str:
-    """The settings row *letter* sets, as the screen has it."""
-    for line in shot:
-        if line.split()[:1] == [letter]:
-            return line
-    return ""
-
-
+@pytest.mark.tui
 @pytest.mark.parametrize(("cols", "rows"), [(40, 20), (80, 24)])
 def test_changing_a_setting_stays_on_the_settings_page(
     tmp_path: Path, cols: int, rows: int
@@ -303,7 +160,7 @@ def test_changing_a_setting_stays_on_the_settings_page(
     *mangled* fails.
     """
     root = _checkout(tmp_path)
-    shots, tail = _drive(root, tmp_path, cols, rows, [b"s", b"a", b"q", b"q"])
+    shots, tail = drive(root, tmp_path, cols, rows, [b"s", b"a", b"q", b"q"])
     listing, settings, changed, back, _gone = shots
 
     assert "queue" in listing[0]
@@ -315,8 +172,8 @@ def test_changing_a_setting_stays_on_the_settings_page(
     assert changed[-2] == settings[-2]
 
     # The switch flipped where it stands…
-    assert _row(changed, "a") != _row(settings, "a")
-    assert _row(changed, "a").split()[:2] == ["a", "auto"]
+    assert row_for(changed, "a") != row_for(settings, "a")
+    assert row_for(changed, "a").split()[:2] == ["a", "auto"]
     # …and the page said so, in the said area rather than over the hints: the
     # word is on the page twice now, its own row and the sentence under them.
     body = changed[1:-3]

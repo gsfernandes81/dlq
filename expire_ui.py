@@ -1709,6 +1709,7 @@ def holding(
     room = len([row for row in queue.rows if row["where"] == "queued"]) - (
         0 if phantom else 1
     )
+    # nomut: start
     while True:
         # Taken here and nowhere else while an item is held: the thread only
         # ever fills a slot, and the facts the screen draws from are the ones
@@ -1735,6 +1736,7 @@ def holding(
             return pos, top
         if settled == "leave":
             return None, top
+    # nomut: end
 
 
 def list_screen(
@@ -1758,6 +1760,7 @@ def list_screen(
     """
     top = 0
     holds = start_moving
+    # nomut: start
     while True:
         if holds:
             # Picked up: the listing goes on being drawn, by :func:`holding`,
@@ -1894,6 +1897,7 @@ def list_screen(
             # Every key that changes a download is on the download's own
             # screen, and pressing one here used to do nothing at all.
             flash = "⏎ opens it; its keys are there"
+    # nomut: end
 
 
 # --------------------------------------------------------------------------- #
@@ -1972,6 +1976,7 @@ def item_screen(win, paint: dict, queue, row: dict, flash: str) -> str:
     one being removed.
     """
     keys = dict(actions_for(row))
+    # nomut: start
     while True:
         win.erase()
         height, width = win.getmaxyx()
@@ -2031,6 +2036,7 @@ def item_screen(win, paint: dict, queue, row: dict, flash: str) -> str:
         # take three tries to disbelieve: on a screen where some keys work,
         # nothing happening is indistinguishable from something refusing.
         flash = "that key does nothing here" if 32 <= key < 127 else ""
+    # nomut: end
 
 
 def ask(
@@ -2156,6 +2162,7 @@ def file_screen(win, paint: dict, path: Path) -> None:
     # Opened at the end, the way `dlq logs` and every tail does: a download's
     # log is read to find out why it stopped, and that is the last line.
     top = len(text)
+    # nomut: start
     while True:
         win.erase()
         height, width = win.getmaxyx()
@@ -2188,6 +2195,7 @@ def file_screen(win, paint: dict, path: Path) -> None:
             top = 0
         elif key == curses.KEY_END:
             top = len(lines)
+    # nomut: end
 
 
 # --------------------------------------------------------------------------- #
@@ -2222,6 +2230,7 @@ def waiting(win, paint: dict, title: str, note: str, work):
     worker = threading.Thread(target=run, daemon=True)
     worker.start()
     started = time.monotonic()
+    # nomut: start
     while True:
         worker.join(0.15)
         if not worker.is_alive():
@@ -2242,6 +2251,7 @@ def waiting(win, paint: dict, title: str, note: str, work):
             win.timeout(-1)
         if key in (ord("q"), 27):
             return "left", ""
+    # nomut: end
 
 
 def tonight_facts(force: bool = False, blind: bool = False) -> dict:
@@ -2808,6 +2818,7 @@ def dest_screen(win, paint: dict) -> list[str]:
     flash = ""
     said = ""
     receipts: list[str] = []
+    # nomut: start
     while True:
         win.erase()
         height, width = win.getmaxyx()
@@ -2877,6 +2888,7 @@ def dest_screen(win, paint: dict) -> list[str]:
         if worked:
             _note(f"{picked} downloads now go to {runner.dests()[picked]}")
             receipts.append(said)
+    # nomut: end
 
 
 #: One key per setting, in :data:`expire_runner.SETTINGS` order, and the same
@@ -3129,6 +3141,7 @@ def settings_screen(win, paint: dict) -> list[str]:
     # A scheduler that will not answer is not a reason to withhold the window
     # and the reserve: the page draws, and the job row says what happened.
     job = job if state == "ok" else [("job", f"could not read it: {job}", "1;31")]
+    # nomut: start
     while True:
         win.erase()
         height, width = win.getmaxyx()
@@ -3226,6 +3239,7 @@ def settings_screen(win, paint: dict) -> list[str]:
             now = runner.spell_setting(picked, runner.settings()[picked])
             _note(f"{picked} is now {now}")
             receipts.append(said)
+    # nomut: end
 
 
 #: Keys the *screen* handles rather than the item: moving a download is the one
@@ -3391,6 +3405,7 @@ def app(win) -> list[str]:
     screen = "list"
     pick_up = ""
 
+    # nomut: start
     while True:
         cursor = max(0, min(cursor, max(0, len(queue.rows) - 1)))
 
@@ -3438,6 +3453,7 @@ def app(win) -> list[str]:
             screen = "list"
         else:
             cursor = found
+    # nomut: end
 
 
 # --------------------------------------------------------------------------- #

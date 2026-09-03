@@ -209,36 +209,101 @@ Decisions that travel with this code — each was arrived at the hard way:
 ## Checks
 
 `make test` (pytest) = `make check` (`.githooks/checks.sh`, the one copy; the
-pre-push hook runs it). Offline, and they need the sibling checkouts.
+pre-push hook runs it). Offline, and they need the sibling checkouts. About
+half a minute; `make mutants` is the slow half and is deliberately not in it.
 
-**The suite is being rebuilt.** Every module's `--self-test` was deleted
-outright on 2026-09-02 — the functions, the `--self-test` flags, the pytest
-shim over them and the completion entry — so that the whole thing can be
-rebuilt as a real pytest suite under `tests/`. What is there so far is
-`tests/test_settings_screen.py`, which came in with the fix it pins; while
-`tests/` is still thin `checks.sh` goes on reading pytest's exit 5 as "no
-tests yet" and passing, which is what keeps the interim commits pushable.
+**The suite has one seam and it is the queue root.** Every module here anchors
+to a checkout rather than to `__file__` — that is what keeps an installed `dlq`
+managing the real queue — so the only honest way to test one is to build a
+checkout somewhere else and run the modules out of *it*. `tests/conftest.py`
+copies this checkout's five modules into a temporary directory, points
+`EXPIRE_HOME` and `HOME` at it and imports them there, so `expire_runner.ROOT`,
+`ytq.HERE` and every path spelled from them land under `tmp_path`. `HOME` is
+what keeps the suite offline: `zwana_quota` reads its credentials from
+`$HOME/zwana-quota/.env` and its cookie from `$HOME/.cache`, so with neither
+there the portal call fails at the credentials, before a socket is opened —
+every test that needs a reading builds one by handing raw portal figures to
+`quota_widget.derive`, the function that builds the real one. The import is
+done once for the session and the tree is *emptied* between tests rather than
+rebuilt, because the import is the expensive part and every path the modules
+spelled is a constant; an autouse fixture asserts the real `config.json`,
+`state.json` and `queue/` are untouched afterwards, which is the check that a
+stray `ROOT` would fail.
 
 **A screen is checked on a screen.** The front ends *are* their screens, and
 the failures worth catching there — a page that leaves when it should stay, a
-sentence clipped over the keys — do not show in a return value. The settings
-test opens the real `dlq ui` on a pty and reads it back through `pyte` (the
-one dev dependency that is not pytest), pointing `EXPIRE_HOME` at a temporary
-copy of the checkout and `HOME` at the same temporary directory, which is what
-keeps it offline: `zwana_quota`'s `.env` lives under `HOME`, so with no
-credentials anywhere the portal is never called. Its assertions are on the
-shape of the screen — which row, which keys, which page — and its one text
-comparison reads the hints out of `expire_ui.hint`, so a reworded hint stays
-a hint and only a mangled one fails. `pyte` answers neither `CSI S` nor
-`CSI T`, which is how ncurses scrolls a region to reuse lines, so the test
-teaches it both: without them the emulator keeps text a terminal has already
-scrolled away and the assertions read a page nobody was ever shown.
+sentence clipped over the keys, a move that says it happened and renames
+nothing — do not show in a return value. `tests/test_screens.py` and
+`tests/test_settings_screen.py` open the real `dlq ui` on a pty and read it
+back through `pyte`, and assert on the *shape*: which screen is up by its title
+bar, that a row for a download exists, that the legend keys are on the key row,
+that after `m ↓ ⏎` the file on disk has a smaller number than its neighbour.
+`pyte` answers neither `CSI S` nor `CSI T`, which is how ncurses scrolls a
+region to reuse lines, so `tests/_pty.py` teaches it both: without them the
+emulator keeps text a terminal has already scrolled away and the assertions
+read a page nobody was ever shown. They are marked `tui` and are most of the
+suite's wall clock.
 
-What the rest of the suite has to cover, when it is written: the clock pinned
-and the timezone swept either side of the date line (the vessel changes zone,
-never the clock); `expire_dl` fetching a file smaller than one chunk rather than
-declining it; the `expire_ui` moves done on a real temporary queue read
-through the real reader (the silent failures are bytes losing their item and
-a download missing from the screen it is removed from); and both front ends'
-line widths down to 32 columns — which is why a long checkout path fails
-them, and that is the path, not a regression.
+**What is pinned is behaviour, never wording.** A reworded refusal, a
+rearranged screen and a renamed helper are all things this code does; a test
+that fails on one of them is a test that has to be rewritten to say the same
+thing again. So the assertions are on properties and round-trips: the sum a
+projection promises against the budget it was given, for every permutation and
+over random nights (`hypothesis`); a figure spelled and parsed back; every line
+of every screen fitting the terminal at any width from 32 up; every download
+appearing on the listing exactly once. Where a sentence *is* the behaviour —
+`admit`'s refusal, quoted word for word on the cut line — what is checked is
+that there is one and that it is the same one, not what it says.
+
+One file per guarantee, and each says which:
+
+| file | what it pins |
+|---|---|
+| `test_tonight_budget.py` | the sum `plan()` promises is never more than the budget, for any ordering; every refusal `admit()` gives has a sentence on it |
+| `test_gate.py` | the order `gate()` answers in — two things wrong at once, and which is reported |
+| `test_firing.py` | `fire()` admits through `admit()`; SIGINT and not SIGTERM; an item leads its own session |
+| `test_settings.py` | a bad stored value reads as the default; a broken `config.json` is never written over; what waives the reserve |
+| `test_clock.py` | the clock pinned and the timezone swept either side of the date line |
+| `test_downloader.py` | `expire_dl` against a loopback server: a file smaller than one chunk is *fetched* |
+| `test_listing.py` | the reader: `gone` vs `away`, and every download listed once |
+| `test_ui_moves.py` | the moves and removals on a real queue: bytes never lose their item |
+| `test_cut_line.py` | the cut line is computed, drawn as a heading, and moves without moving the budget |
+| `test_layout.py` | every line fits, at 32, 40, 80 and swept between |
+| `test_cli.py` | what a bare `dlq` does, and where each word goes |
+| `test_item_contract.py` | every way an item can fail to declare itself is a reason and never an exception |
+| `test_dump.py` | `dlq dump` finishes on the broken trees it exists for |
+| `test_screens.py`, `test_settings_screen.py` | the two screens, on a pty |
+
+**`make mutants` is the suite's own check.** poodle changes one operator,
+literal or comparison at a time and runs the tests against it; a mutant that
+survives is a line nothing was asserting anything about, which is the question
+coverage cannot answer. `poodle_config.py` carries the whole arrangement and
+the reasons — the flat layout, the sibling checkouts a worker's copy cannot
+find for itself, and the copy filters that keep this device's `state.json` and
+`config.json` out of a run that exists to be independent of them. The curses
+event loops in `expire_ui.py` are fenced `# nomut: start` / `# nomut: end`: a
+mutant inside one does not fail a test, it hangs a terminal until the timeout
+kills it, and what those loops do is checked under a pty instead. It is a
+**ratchet and never a gate** — some mutants are equivalent, and a good few are
+a message reworded, which this suite declines to pin on purpose — so
+`--fail_under` sits under the score already reached and goes up when the score
+does. It is out of `make test` and out of the pre-push hook because it takes
+hours, and a push here is a deploy.
+
+The whole run is the ratchet; the way to get an *answer* about one module is a
+scoped one, because the command is run once per mutant and most of the suite
+does not touch most of the code. `POODLE_TESTS` narrows it, and pairs with
+poodle's own `--only`:
+
+```
+POODLE_TESTS="tests/test_gate.py tests/test_tonight_budget.py" \
+    uv run --group mutants poodle --only expire_runner.py
+```
+
+Same mutants, same verdicts, a fraction of the wall clock — and a survivor
+list short enough to read.
+
+Two things that fail for reasons that are not regressions: a **long checkout
+path**, because the front ends check that every line fits 32 columns and the
+root is on the status screen; and a **missing sibling checkout**, because the
+modules import across them the same way a real run does.
