@@ -154,6 +154,125 @@ def test_a_blind_firing_admits_against_what_the_items_declared(
     assert remaining == dlq.runner.NO_DEADLINE
 
 
+def _budgets(dlq, monkeypatch, spent, admitted=10 * MiB):
+    """Every budget ``fire()`` puts to ``admit``, in order, each item spending
+    *spent* on the wire."""
+    seen = []
+
+    def admit(item, record, budget, rate, remaining, flying, free_disk=None):
+        seen.append(budget)
+        return admitted, ""
+
+    monkeypatch.setattr(dlq.runner, "admit", admit)
+    monkeypatch.setattr(dlq.runner, "run_item", lambda *a: (0, spent, None))
+    dlq.runner.fire(force=True)
+    return seen
+
+
+def test_what_one_item_spends_comes_off_what_the_next_may_have(
+    firing, monkeypatch
+):
+    """The budget is the night's, not each item's.
+
+    A budget handed round intact would let a three-item queue spend the whole
+    night's allowance three times over — and the reserve is the same figure
+    every one of them was measured against.
+    """
+    three(firing)
+    spent = 20 * MiB
+    seen = _budgets(firing, monkeypatch, spent)
+    assert len(seen) == 3
+    assert seen[1] == seen[0] - spent
+    assert seen[2] == seen[1] - spent
+
+
+def test_a_night_that_overspends_has_nothing_left_rather_than_less_than_nothing(
+    firing, monkeypatch
+):
+    """An item that crossed more than it was given leaves no budget behind it.
+
+    Not a negative one, which every comparison downstream would read as a
+    number smaller than any item and which ``human()`` would print as a
+    quantity of data.
+    """
+    three(firing)
+    seen = _budgets(firing, monkeypatch, 4 * firing.runner.spendable_bytes(
+        firing.reading(free=600 * MiB)
+    ))
+    assert seen[1] == 0
+    assert seen[2] == 0
+
+
+def _reading_after_reading(dlq, monkeypatch, first, rest):
+    """``read_portal`` answering *first* once and *rest* every time after."""
+    answers = [first]
+    monkeypatch.setattr(
+        dlq.runner, "read_portal", lambda: answers.pop(0) if answers else rest
+    )
+
+
+def test_a_fresh_reading_that_says_there_is_more_does_not_raise_the_budget(
+    firing, monkeypatch
+):
+    """The portal is re-asked between items, and it is only ever bad news.
+
+    A reading that says there is *more* than the night was budgeted is not a
+    reason to spend more: the budget was the smaller of two limits when it was
+    worked out, and the limit that is not the portal's remainder has not moved.
+    """
+    three(firing)
+    spent = 20 * MiB
+    plenty = firing.reading(free=760 * MiB)
+    _reading_after_reading(firing, monkeypatch, firing.reading(free=600 * MiB), plenty)
+
+    seen = _budgets(firing, monkeypatch, spent)
+    assert firing.runner.spendable_bytes(plenty) > seen[0]
+    assert seen[1] == seen[0] - spent
+    assert seen[2] == seen[1] - spent
+
+
+def test_a_fresh_reading_that_says_there_is_less_takes_the_budget_down_at_once(
+    firing, monkeypatch
+):
+    """That one is the money running out, and it is enforced on the next item
+    rather than at the next firing."""
+    three(firing)
+    meagre = firing.reading(free=200 * MiB)
+    _reading_after_reading(firing, monkeypatch, firing.reading(free=600 * MiB), meagre)
+
+    seen = _budgets(firing, monkeypatch, 20 * MiB)
+    assert seen[1] == firing.runner.spendable_bytes(meagre)
+    assert seen[1] < seen[0] - 20 * MiB
+
+
+def test_a_firing_is_nine_minutes_of_the_night_and_not_the_whole_window(
+    firing, monkeypatch
+):
+    """The platform stops a job after about ten minutes, so a firing takes a
+    slice and hands the rest of the window back to the firings behind it.
+
+    A pass that offered items the whole night's working time would admit a
+    download it has nine minutes to do — and a whole item cut off at nine
+    minutes has spent every byte it moved for nothing.
+    """
+    three(firing)
+    seen = []
+
+    def admit(item, record, budget, rate, remaining, flying, free_disk=None):
+        seen.append(remaining)
+        return 0, "no"
+
+    monkeypatch.setattr(firing.runner, "admit", admit)
+    monkeypatch.setattr(firing.runner, "portal_now", lambda: (firing.reading(), ""))
+    night = firing.runner.snapshot(force=True)["night_seconds"]
+
+    firing.runner.fire(force=True)
+    assert seen
+    assert seen[0] <= firing.runner.FIRING_SECONDS
+    # And the night it was cut out of is a good deal longer than that.
+    assert night > 2 * firing.runner.FIRING_SECONDS
+
+
 def test_a_firing_the_gate_stops_writes_a_heartbeat_and_spends_nothing(
     firing, spawned
 ):
@@ -391,6 +510,69 @@ def test_an_item_that_says_not_tonight_while_moving_nothing_runs_out_of_nights(
     record = firing.runner.load_state()["items"]["10-thing.py"]
     assert record["stalls"] == 0
     assert record["attempts"] == 1
+
+
+def _creeping(dlq, monkeypatch, step=200):
+    """A clock that jumps *step* seconds at every reading.
+
+    An item is only ever counted as stalled when it was given room *and* time
+    to make progress, so a firing that took no time at all cannot produce one.
+    """
+    clock = [dlq.runner.now()]
+
+    def creeping():
+        clock[0] += step
+        return clock[0]
+
+    monkeypatch.setattr(dlq.runner, "now", creeping)
+
+
+def test_an_item_that_moved_something_is_not_counted_as_a_stall(
+    firing, monkeypatch
+):
+    """A slow night is not a stall, and three slow nights are not a strike.
+
+    The stall count is what eventually sets an item aside, so counting one
+    against a download that is working — just not finishing within a nine
+    minute firing, which is most large downloads — would retire the items the
+    queue exists for.
+    """
+    firing.item("10-thing.py", cap=500 * MiB)
+    monkeypatch.setattr(firing.runner, "admit", lambda *a, **kw: (100 * MiB, ""))
+    monkeypatch.setattr(
+        firing.runner, "run_item", lambda *a: (firing.runner.EX_TEMPFAIL, 5 * MiB, None)
+    )
+    _creeping(firing, monkeypatch)
+
+    for _ in range(firing.runner.MAX_STALLS + 1):
+        firing.runner.fire(force=True)
+    record = firing.runner.load_state()["items"]["10-thing.py"]
+    assert record.get("stalls", 0) == 0
+    assert record["attempts"] == 0
+    assert (firing.root / "queue" / "10-thing.py").exists()
+
+
+def test_an_item_that_stalls_every_night_is_eventually_set_aside(
+    firing, monkeypatch
+):
+    """Stalls become a strike and strikes run out, or it would stall forever.
+
+    Every one of those nights costs a firing and whatever the item moved before
+    giving up, and nothing is ever struck off the queue for it.
+    """
+    firing.item("10-thing.py", cap=500 * MiB)
+    monkeypatch.setattr(firing.runner, "admit", lambda *a, **kw: (100 * MiB, ""))
+    monkeypatch.setattr(
+        firing.runner, "run_item", lambda *a: (firing.runner.EX_TEMPFAIL, 0, None)
+    )
+    _creeping(firing, monkeypatch)
+
+    nights = firing.runner.MAX_STALLS * firing.runner.MAX_ATTEMPTS
+    for _ in range(nights):
+        firing.runner.fire(force=True)
+    assert not (firing.root / "queue" / "10-thing.py").exists()
+    assert (firing.root / "failed" / "10-thing.py").exists()
+    assert firing.runner.load_state()["items"]["10-thing.py"]["retired"] == "failed"
 
 
 def test_the_status_screen_draws_from_the_runners_own_facts(dlq, monkeypatch, capsys):

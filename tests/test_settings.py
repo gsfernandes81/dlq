@@ -256,6 +256,19 @@ def test_the_reserve_stands_unless_it_is_told_not_to(dlq):
     assert dlq.runner.floor_bytes(without) == dlq.runner.reserve_bytes()
 
 
+def test_the_reserve_is_decimal_mb_because_that_is_how_data_is_sold(dlq):
+    """The requirement was given in MB and a phone plan is sold in them.
+
+    Read in MiB instead, a reserve set to 100 would quietly keep back 4.9%%
+    more than the person asked for every night, out of an allowance that
+    expires at midnight either way.
+    """
+    dlq.config({"reserve_mb": 250})
+    assert dlq.runner.reserve_bytes() == 250_000_000
+    dlq.config({})
+    assert dlq.runner.reserve_bytes() == dlq.runner.SETTINGS["reserve"]["default"] * 1_000_000
+
+
 def test_nothing_is_waived_on_a_reading_that_has_not_said(dlq):
     """A reading with no paid figure is not one that says there is paid data."""
     dlq.config({"reserve_when_paid": False})
@@ -317,6 +330,43 @@ def test_the_budget_is_the_smaller_of_the_two_limits(dlq):
     assert dlq.runner.spendable_bytes(doc) == 0
 
 
+def _discount(dlq, doc) -> int:
+    """How much of the expiring allowance the budget declines to spend."""
+    return doc["free"]["left_bytes"] - dlq.runner.spendable_bytes(doc)
+
+
+def test_the_expiring_allowance_is_never_spent_to_the_letter(dlq):
+    """On a night where the free figure is the limit rather than the floor.
+
+    ``free.left_bytes`` can only *overstate* — the portal lags live traffic and
+    the carry-in it is worked out from is a lower bound — so what is spent is
+    always less than what it says. The discount has two halves and the larger
+    of them is the one taken: a proportion, which is what protects a big
+    reading, and a fixed floor, which is what protects a small one where three
+    per cent of nearly nothing would protect nothing at all.
+
+    Each reading here carries paid data behind it, which is what puts the floor
+    out of the way and leaves this figure as the limit under test.
+    """
+    behind = 4 * 1024 * MiB
+    big = dlq.reading(free=600 * MiB, paid=behind)
+    small = dlq.reading(free=20 * MiB, paid=behind)
+
+    # Both are limited by the free figure rather than by the reserve.
+    for doc in (big, small):
+        assert dlq.runner.spendable_bytes(doc) < doc["free"]["left_bytes"]
+        assert dlq.runner.spendable_bytes(doc) < doc["today"]["remainder_bytes"]
+
+    # A proportion of the big one is more than the floor, and it is what is
+    # taken; taking only the floor would spend three per cent of an evening's
+    # allowance that the reading never really had.
+    assert _discount(dlq, big) >= dlq.runner.FREE_HAIRCUT_FRACTION * (600 * MiB)
+    assert _discount(dlq, big) > dlq.runner.FREE_HAIRCUT_FLOOR
+    # A proportion of the small one is less than the floor, and the floor wins.
+    assert dlq.runner.FREE_HAIRCUT_FRACTION * (20 * MiB) < dlq.runner.FREE_HAIRCUT_FLOOR
+    assert _discount(dlq, small) >= dlq.runner.FREE_HAIRCUT_FLOOR
+
+
 def test_a_stale_reading_is_discounted_by_how_stale_it_is(dlq):
     """On a night where the expiring grant is the limit rather than the floor.
 
@@ -326,6 +376,11 @@ def test_a_stale_reading_is_discounted_by_how_stale_it_is(dlq):
     fresh = dlq.reading(free=600 * MiB, paid=4 * 1024 * MiB, age=0)
     old = dlq.reading(free=600 * MiB, paid=4 * 1024 * MiB, age=90)
     assert dlq.runner.spendable_bytes(old) < dlq.runner.spendable_bytes(fresh)
+    # And it is a rate over the time rather than a token taken off for being
+    # old: a minute and a half of a mobile link is megabytes, and a reading
+    # that discounted bytes for it would be a reading nothing was discounted.
+    lost = dlq.runner.spendable_bytes(fresh) - dlq.runner.spendable_bytes(old)
+    assert lost > MiB
 
 
 # --------------------------------------------------------------------------- #

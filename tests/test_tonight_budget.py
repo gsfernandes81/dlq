@@ -253,12 +253,111 @@ def test_every_refusal_carries_a_sentence(dlq):
         assert why.strip()
 
 
+def test_a_whole_item_must_finish_with_time_still_to_go(dlq):
+    """Not merely fit: finish, with half a minute of the firing left over.
+
+    A whole item is all or nothing — there is no partial credit and nothing is
+    struck off the queue — so one cut off at the stop time has spent every byte
+    it moved for nothing, and will spend them again tomorrow. The margin is
+    what keeps a projection that was right about the rate from being wrong
+    about the outcome.
+    """
+    rate = float(MiB)
+    remaining = 600.0
+    fits = item("10-a.py", int(rate * (remaining - 30)), partial=False)
+    over = item("10-a.py", int(rate * (remaining - 29)), partial=False)
+    assert admit(dlq, fits, rate=rate, remaining_time=remaining)[0] == fits["cap"]
+    got, why = admit(dlq, over, rate=rate, remaining_time=remaining)
+    assert got == 0 and why
+
+
 def test_a_nearly_finished_download_is_not_blocked_by_the_minimum(dlq):
     """The slice minimum stops nightly churn; it may not strand a last MiB."""
     cap = 100 * MiB
     row = item("10-a.py", cap, part=cap - 1024, slice_min=32 * MiB)
     got, why = admit(dlq, row, budget=GiB)
     assert got == 1024 and not why
+
+
+def test_a_refusal_of_an_item_s_own_does_not_stop_the_queue_behind_it(dlq):
+    """Only "out of time" is the firing's; every other reason is the item's.
+
+    A download too big for what is left must not take the small one behind it
+    down as well, or the queue would be only as long as its first unaffordable
+    item — and the cut line, which is drawn from this, would fall in the wrong
+    place and say so on the screen.
+    """
+    budget = 100 * MiB
+    big = item("10-big.py", 500 * MiB, partial=False)
+    small = item("20-small.py", 20 * MiB, partial=False)
+
+    planned = dlq.runner.plan([big, small], {}, budget, FAST, 3600, False)
+    got = {entry["name"]: entry["bytes"] for entry in planned}
+    assert got == {"10-big.py": 0, "20-small.py": 20 * MiB}
+    assert next(e for e in planned if e["name"] == "10-big.py")["reason"]
+
+
+def test_a_whole_item_is_finished_once_and_never_offered_again(dlq):
+    """A night is a row of firings, and one done in the first is not in the
+    second.
+
+    Offered again it would be projected to spend its cap once per firing, and
+    the screen would draw a line for a night four times the size of the one
+    the runner is going to work.
+    """
+    row = item("10-a.py", 50 * MiB, partial=False)
+    night = dlq.runner.plan(
+        [row], {}, GiB, FAST, 4 * dlq.runner.JOB_PERIOD, False
+    )
+    assert total(night) == 50 * MiB
+
+
+def test_a_night_is_as_many_firings_as_it_has_periods(dlq):
+    """One firing per :data:`expire_runner.JOB_PERIOD`, and no more.
+
+    A projection that walked a firing more than the night has would promise a
+    slice no job is ever going to run — and the item it promised it to sits
+    above the cut line saying it downloads tonight.
+    """
+    rate = 10 * MiB
+    period = dlq.runner.JOB_PERIOD
+    nights = [
+        total(
+            dlq.runner.plan(
+                [item("10-a.py", 100 * GiB)], {}, 100 * GiB, rate, n * period, False
+            )
+        )
+        for n in (1, 2, 3)
+    ]
+    assert nights[0] > 0
+    assert nights[1] == 2 * nights[0]
+    assert nights[2] == 3 * nights[0]
+
+
+def test_an_item_that_costs_exactly_what_is_left_still_fits(dlq):
+    """The budget is what may be spent, not what may be approached."""
+    budget = 100 * MiB
+    got, why = admit(dlq, item("10-a.py", budget, partial=False), budget=budget)
+    assert got == budget and not why
+    over, said = admit(dlq, item("10-a.py", budget + 1, partial=False), budget=budget)
+    assert over == 0 and said
+
+
+def test_an_item_may_declare_a_slice_minimum_of_its_own(dlq):
+    """The built-in minimum stops nightly churn on items that said nothing.
+
+    An item that declared a smaller one has already answered that question for
+    itself, and its figure is the one used — otherwise the header is a header
+    nothing reads, and the item never gets the small slices it asked for.
+    """
+    small = 4 * MiB
+    assert small < dlq.runner.SLICE_MIN_BYTES
+    budget = 8 * MiB
+
+    got, why = admit(dlq, item("10-a.py", GiB, slice_min=small), budget=budget)
+    assert got and not why
+    refused, said = admit(dlq, item("10-a.py", GiB), budget=budget)
+    assert refused == 0 and said
 
 
 def test_a_blind_budget_is_not_derated_twice(dlq):

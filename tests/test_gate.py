@@ -215,6 +215,25 @@ def test_a_night_that_downloads_nothing_has_no_working_time(dlq):
     assert blind["night_seconds"] == dlq.runner.NO_DEADLINE
 
 
+def test_asking_to_fly_blind_and_flying_blind_are_two_different_things(dlq):
+    """A portal that answers is always preferred to a guess.
+
+    So ``--blind`` on a night the portal is up changes nothing, and the screen
+    must not say it did — the floor is intact and the run is spending the
+    expiring grant, which is the opposite of what a blind run means. The other
+    way round is just as wrong: a night with no reading that nobody asked
+    about is a fault that stops, not a blind run that goes ahead on the SIM.
+    """
+    dlq.item("10-a.py")
+    asked = dlq.facts(portal=dlq.reading(), blind=True, force=True)
+    unasked = dlq.facts(portal=None, blind=False, force=True)
+    flying = dlq.facts(portal=None, blind=True, force=True)
+
+    assert asked["blind"] is False and asked["verdict"] == "go"
+    assert unasked["blind"] is False and unasked["verdict"] not in dlq.runner.GATE_GO
+    assert flying["blind"] is True and flying["verdict"] == "blind"
+
+
 def test_a_blind_snapshot_spends_what_the_items_declared(dlq):
     """The figure ``run-now --blind`` says out loud is the runner's own.
 
