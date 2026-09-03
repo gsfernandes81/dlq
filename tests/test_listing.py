@@ -119,6 +119,26 @@ def test_how_much_of_it_is_here_is_counted_off_the_disk(dlq):
     assert dlq.sched._state_of(row) == "25%"
 
 
+def test_what_is_here_is_every_payload_file_added_up(dlq):
+    """A download that arrived in pieces has all of them on the disk.
+
+    This figure is what ``dlq now`` subtracts from the declaration to say what
+    it will spend, and what the progress cell counts against, so measuring
+    only one of the pieces would ask for agreement to buy bytes already
+    bought.
+    """
+    dlq.item("10-one.py", cap=100 * MiB)
+    work = dlq.root / "work" / "10-one.py"
+    work.mkdir(parents=True)
+    for number, size in ((1, 3 * MiB), (2, 5 * MiB), (3, 2 * MiB)):
+        (work / f"part{number}.iso").write_bytes(b"x" * size)
+    (work / "nested").mkdir()
+    (work / "nested" / "more.iso").write_bytes(b"x" * MiB)
+
+    row = next(row for row in dlq.sched.items() if row["name"] == "10-one.py")
+    assert row["have"] == 11 * MiB
+
+
 def test_an_item_with_no_stated_size_is_measured_against_its_cap(dlq):
     dlq.item("10-thing.py", cap=1000)
     row = row_for(dlq.sched.items(), "10-thing.py")

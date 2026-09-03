@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -173,6 +174,74 @@ def test_downloading_one_item_now_asks_before_it_spends(dlq, monkeypatch, capsys
     said = capsys.readouterr()
     assert dlq.ytq.human(200 * MiB) in said.out
     assert "mobile data" in said.out
+
+
+def test_nothing_spends_without_a_yes(dlq, monkeypatch, capsys):
+    """The confirmation is the whole guard on this path.
+
+    ``dlq now`` and ``run-now --blind`` are the two ways to spend metered data
+    on purpose, so every guard the runner carries is off and the only thing
+    between the question and the bytes is the answer. A "no" must start
+    nothing, and a "yes" must start exactly what was described.
+    """
+    dlq.item("10-one.py", cap=200 * MiB)
+    monkeypatch.setattr(dlq.sched.sys.stdin, "isatty", lambda: True)
+    spawned = []
+
+    def spawn(argv, **kw):
+        spawned.append(argv)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(dlq.sched.subprocess, "run", spawn)
+    ran = []
+    monkeypatch.setattr(
+        dlq.sched, "_run_item", lambda runner, row, cap: ran.append(cap) or 0
+    )
+
+    monkeypatch.setattr(dlq.sched, "_confirm", lambda question: False)
+    assert dlq.sched.run_one(dlq.sched.items()[0], assume_yes=False) == 0
+    assert dlq.sched.run_blind(assume_yes=False) == 0
+    assert ran == [] and spawned == []
+
+    monkeypatch.setattr(dlq.sched, "_confirm", lambda question: True)
+    assert dlq.sched.run_one(dlq.sched.items()[0], assume_yes=False) == 0
+    assert ran == [200 * MiB]
+    dlq.sched.run_blind(assume_yes=False)
+    assert spawned == [dlq.sched.queue_run_argv(blind=True)]
+
+
+def test_what_it_says_it_will_spend_is_what_is_left_to_fetch(dlq, monkeypatch, capsys):
+    """A resumable download half done costs the half that is missing.
+
+    The figure is the whole point of asking, so quoting the declaration of an
+    item that already has 150 MiB of it on the disk would be asking for
+    agreement to four times what it is about to spend — and the slice the item
+    is then given is this same number.
+    """
+    dlq.item("10-one.py", cap=200 * MiB)
+    work = dlq.root / "work" / "10-one.py"
+    work.mkdir(parents=True)
+    (work / "part.iso").write_bytes(b"x" * (150 * MiB))
+    monkeypatch.setattr(dlq.sched.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(dlq.sched, "_confirm", lambda question: True)
+    ran = []
+    monkeypatch.setattr(
+        dlq.sched, "_run_item", lambda runner, row, cap: ran.append(cap) or 0
+    )
+
+    assert dlq.sched.run_one(dlq.sched.items()[0], assume_yes=False) == 0
+    assert ran == [50 * MiB]
+    assert dlq.ytq.human(50 * MiB) in capsys.readouterr().out
+
+
+def test_an_item_that_has_already_taken_its_declaration_is_refused(dlq, capsys):
+    """Nothing is left to fetch, so there is nothing to agree to spend."""
+    dlq.item("10-one.py", cap=200 * MiB)
+    work = dlq.root / "work" / "10-one.py"
+    work.mkdir(parents=True)
+    (work / "part.iso").write_bytes(b"x" * (200 * MiB))
+    assert dlq.sched.run_one(dlq.sched.items()[0], assume_yes=True) == 1
+    assert "EXPECT_BYTES" in capsys.readouterr().err
 
 
 def test_an_item_that_cannot_run_is_refused_with_the_reason(dlq, capsys):

@@ -110,6 +110,87 @@ def test_the_status_screen_leads_with_the_verdict(dlq, width):
     assert lines[1].strip() == headline.strip()[: len(lines[1].strip())]
 
 
+MB = 1_000_000
+
+
+@pytest.mark.parametrize("width", WIDTHS)
+def test_the_money_block_is_the_reserve_that_applies_tonight(dlq, width):
+    """Not the reserve as it is *set*, which is not always the same figure.
+
+    With ``reserve-when-paid`` off and paid data behind the grant, nothing is
+    being kept back — and a screen still showing the setting would be
+    describing a different night from the one the runner is about to work.
+    """
+    stocked(dlq)
+    dlq.sched.set_setting("reserve", "250")
+    kept = plain(
+        dlq.sched.compose_status(
+            dlq.facts(portal=dlq.reading(free=400 * MiB, paid=0), force=True),
+            width,
+            paint,
+        )
+    )
+    assert any("250" in line for line in kept)
+
+    dlq.config({**dlq.runner.load_config(), "reserve_when_paid": False})
+    waived = dlq.facts(
+        portal=dlq.reading(free=400 * MiB, paid=500 * MB), force=True
+    )
+    assert waived["reserve_waived"] is True
+    stood_aside = plain(dlq.sched.compose_status(waived, width, paint))
+    assert not any("250" in line for line in stood_aside)
+    assert any("0 MB" in line for line in stood_aside)
+
+
+@pytest.mark.parametrize("width", WIDTHS)
+def test_a_reserve_that_stood_aside_does_not_read_as_a_reserve_of_nothing(
+    dlq, width
+):
+    """Both are nought tonight, and they are not the same fact.
+
+    "0 MB is always kept back" is a figure and a lie on one line: it is not
+    always kept back, it was waived a moment ago because paid data turned up,
+    and it comes back the moment that data is spent. The two screens below are
+    drawn from the *same* portal reading and differ only in the config, so
+    anything that separates them is the screen saying which of the two it is.
+    """
+    stocked(dlq)
+    doc = dlq.reading(free=400 * MiB, paid=500 * MB)
+
+    dlq.sched.set_setting("reserve", "0")
+    nothing_kept = dlq.facts(portal=doc, force=True)
+    assert nothing_kept["floor_bytes"] == 0
+    assert nothing_kept["reserve_waived"] is False
+
+    dlq.sched.set_setting("reserve", "250")
+    dlq.config({**dlq.runner.load_config(), "reserve_when_paid": False})
+    stood_aside = dlq.facts(portal=doc, force=True)
+    assert stood_aside["floor_bytes"] == 0
+    assert stood_aside["reserve_waived"] is True
+
+    drawn = [
+        "\n".join(plain(dlq.sched.compose_status(facts, width, paint)))
+        for facts in (nothing_kept, stood_aside)
+    ]
+    assert drawn[0] != drawn[1]
+
+
+@pytest.mark.parametrize("width", WIDTHS)
+def test_what_the_screen_says_is_spendable_is_what_the_runner_decided(dlq, width):
+    """Spelled from ``facts``, never worked out a second time on the way past.
+
+    Two answers to "what may tonight spend" is the failure the facts/layout
+    split exists to prevent, and it is the figure the cut line on the other
+    screen is drawn from.
+    """
+    stocked(dlq)
+    facts = facts_for(dlq)
+    lines = plain(dlq.sched.compose_status(facts, width, paint))
+    assert facts["spendable"] > 0
+    said = dlq.runner.human(facts["spendable"])
+    assert any(said in line for line in lines), said
+
+
 @pytest.mark.parametrize("verdict", ["go", "early", "late", "empty", "off", "spent",
                                      "blind", "no-portal", "stale"])
 def test_every_verdict_has_words_on_both_screens(dlq, verdict):

@@ -510,6 +510,11 @@ def test_an_item_that_says_not_tonight_while_moving_nothing_runs_out_of_nights(
     record = firing.runner.load_state()["items"]["10-thing.py"]
     assert record["stalls"] == 0
     assert record["attempts"] == 1
+    # One strike is not the last of them: the item keeps its place in the
+    # queue and its remaining nights, which is the difference between a link
+    # that was down for an evening and an item that is never going to work.
+    assert (firing.root / "queue" / "10-thing.py").exists()
+    assert "retired" not in record
 
 
 def _creeping(dlq, monkeypatch, step=200):
@@ -525,6 +530,27 @@ def _creeping(dlq, monkeypatch, step=200):
         return clock[0]
 
     monkeypatch.setattr(dlq.runner, "now", creeping)
+
+
+def test_what_an_item_has_spent_adds_up_across_the_nights(firing, monkeypatch):
+    """The only record of what a download has actually cost.
+
+    ``dlq list`` and the item screen read it, and it is what says a resumable
+    download has already been paid for three times over. A night's bytes are
+    added to it; they never replace it.
+    """
+    firing.item("10-thing.py", cap=500 * MiB)
+    monkeypatch.setattr(firing.runner, "admit", lambda *a, **kw: (10 * MiB, ""))
+    monkeypatch.setattr(
+        firing.runner,
+        "run_item",
+        lambda *a: (firing.runner.EX_TEMPFAIL, 10 * MiB, None),
+    )
+    seen = []
+    for _ in range(3):
+        firing.runner.fire(force=True)
+        seen.append(firing.runner.load_state()["items"]["10-thing.py"]["bytes"])
+    assert seen == [10 * MiB, 20 * MiB, 30 * MiB]
 
 
 def test_an_item_that_moved_something_is_not_counted_as_a_stall(

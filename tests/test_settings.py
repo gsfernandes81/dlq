@@ -170,6 +170,34 @@ def test_setting_a_destination_leaves_the_settings_alone_and_the_other_way(dlq):
     assert dlq.runner.settings()["reserve"] == 250
 
 
+def test_a_destination_that_is_already_there_is_taken_as_it_is(dlq):
+    """The ordinary case: somebody points the queue at a folder that exists."""
+    there = dlq.root / "films"
+    there.mkdir()
+    worked, said = dlq.sched.set_dest("video", str(there))
+    assert worked and said
+    assert dlq.runner.dests()["video"] == there
+
+
+def test_a_destination_is_created_one_level_and_never_a_tree(dlq):
+    """A typo should not quietly build a folder nobody meant.
+
+    Its parent missing is the signal that this *is* a typo rather than a new
+    folder — and the cost of guessing wrong is a night's downloads delivered
+    somewhere nobody will look for them.
+    """
+    one = dlq.root / "films"
+    worked, _ = dlq.sched.set_dest("video", str(one))
+    assert worked and one.is_dir()
+
+    deep = dlq.root / "nope" / "deeper"
+    worked, said = dlq.sched.set_dest("video", str(deep))
+    assert not worked and said[-1].strip()
+    assert not deep.exists() and not deep.parent.exists()
+    # And the one that did take is still the one in force.
+    assert dlq.runner.dests()["video"] == one
+
+
 # --------------------------------------------------------------------------- #
 # Typing one in
 # --------------------------------------------------------------------------- #

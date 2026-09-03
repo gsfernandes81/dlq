@@ -403,6 +403,29 @@ def test_the_night_is_a_row_of_slices_rather_than_one_long_run(dlq):
     assert total(one) <= firing
 
 
+def test_within_one_firing_what_one_item_takes_leaves_less_for_the_next(dlq):
+    """A firing is nine minutes for the queue, not nine minutes each.
+
+    The clock inside a pass is worked down by what every item is given, so two
+    downloads share a firing rather than both being sized against the whole of
+    it. Without that the projection would promise two nine-minute downloads in
+    one nine-minute firing, and draw the cut line under both of them.
+    """
+    rate = 10 * MiB
+    room = dlq.runner.working_rate(rate) * (dlq.runner.FIRING_SECONDS - 45)
+    planned = dlq.runner.plan(
+        [item("10-a.py", 10 * GiB), item("20-b.py", 10 * GiB)],
+        {},
+        100 * GiB,
+        rate,
+        dlq.runner.FIRING_SECONDS,
+        False,
+    )
+    assert total(planned) <= room
+    # The second is offered what the first left, which is less than the firing.
+    assert planned[1]["bytes"] < planned[0]["bytes"]
+
+
 def test_the_rate_a_night_is_worked_at_is_half_what_was_measured(dlq):
     """One conversion, made in one place, and floored.
 

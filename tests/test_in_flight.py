@@ -30,6 +30,17 @@ MB = 1_000_000
 ROOMY = 4 * GiB
 
 
+def _slow(dlq) -> float:
+    """A supervision tick long enough to be about the portal.
+
+    The portal is asked on every one of them, and five minutes passes between
+    two — which is what the dark timer is measured in. Spelled from the
+    runner's own periods rather than as a number, so the tests that use it go
+    on being about the timer if either period is ever changed.
+    """
+    return dlq.runner.PORTAL_POLL + 300
+
+
 class Supervised:
     """A download under :func:`expire_runner.watch`, on a treadmill.
 
@@ -38,9 +49,10 @@ class Supervised:
     advances exactly once per supervision tick, which is what makes "after
     three ticks it had moved this much" a thing a test can say.
 
-    The clock advances by one :data:`expire_runner.IFACE_POLL` per reading,
-    which is what keeps the supervisor's inner wait from spinning — one tick of
-    the loop is one look at the counter, and no test here ever sleeps.
+    The clock advances by *step* per reading — one
+    :data:`expire_runner.IFACE_POLL` unless a test wants coarser time — which
+    is what keeps the supervisor's inner wait from spinning: one tick of the
+    loop is one look at the counter, and no test here ever sleeps.
     """
 
     #: Somewhere far from any real epoch, so a stop time is obviously relative.
@@ -122,10 +134,12 @@ def test_a_download_is_stopped_when_it_runs_away_from_its_slice(dlq, monkeypatch
     This is the watchdog that does not need the portal, and so the only one a
     blind run has. What it guards against is an item that ignores its slice —
     a resumable download that restarts from zero, a redirect to something
-    enormous — spending the SIM for as long as the firing lasts.
+    enormous — spending the SIM for as long as the firing lasts. Twice the
+    slice is a runaway by any reading of it; the margin below is for the wire,
+    and the wire does not cost as much as the payload.
     """
     cap = 100 * MiB
-    run = supervised(dlq, monkeypatch, [4 * cap])
+    run = supervised(dlq, monkeypatch, [2 * cap])
     run.run(cap=cap)
     assert run.stopped
 
@@ -269,8 +283,13 @@ def test_a_blind_run_has_no_floor_to_enforce_and_never_asks_for_one(
 # --------------------------------------------------------------------------- #
 
 
-def test_the_stop_time_stops_it(dlq, monkeypatch):
-    """The grant is gone at the reset; a download past it is spending the SIM."""
+def test_the_stop_time_stops_the_download(dlq, monkeypatch):
+    """Past it the grant this run was spending has already reset.
+
+    Whatever is still crossing the interface after that is being paid for out
+    of the phone's own plan, which is the one thing the whole window exists to
+    avoid.
+    """
     run = supervised(dlq, monkeypatch, [0] * 6)
     run.run(stop_by=Supervised.START + 60)
     assert run.stopped
@@ -292,14 +311,6 @@ def test_nothing_interrupts_a_download_that_has_no_stop_time(dlq, monkeypatch):
 # --------------------------------------------------------------------------- #
 # The portal going quiet
 # --------------------------------------------------------------------------- #
-
-
-#: A supervision tick long enough that the portal is asked on every one of
-#: them and that five minutes passes between two of them. Spelled from the
-#: runner's own periods rather than as a number, so these two tests go on
-#: being about the dark timer if either period is ever changed.
-def _slow(dlq) -> float:
-    return dlq.runner.PORTAL_POLL + 300
 
 
 def test_a_portal_that_goes_dark_for_five_minutes_stops_the_download(
