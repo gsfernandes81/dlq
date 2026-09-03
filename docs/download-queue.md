@@ -599,8 +599,15 @@ with `~` where it is under home and shortened to just the folder's own name
 downloads go](#where-downloads-go)) — and `j` for the nightly job — armed,
 not armed, or the error stopping it from arming — which arms it when it is
 not armed and cancels it, with a confirm, when it is. Each row's key is
-beside its name (`w r p m a n d j`); on a short phone the screen keeps every name, value and
-complaint and drops the grey line saying what each one means.
+beside its name (`w r p m a n d j`).
+
+**A change stays on the page.** The row redraws with the new value and the
+page says what it did, in the setting's own sentence, wrapped under the rows
+— `d`'s destinations page does the same one level down — and `q` is what
+leaves, printing everything the session changed on the way out. On a short
+phone the screen keeps every name, value and complaint, and gives up the
+blank lines first, then the grey line saying what each setting means, and
+only then that sentence.
 
 | setting              | default | what it does                                     |
 |----------------------|---------|---------------------------------------------------|

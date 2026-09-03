@@ -45,5 +45,13 @@ dev-mode-dirs = ["."]
 # musllinux). The pin is Termux's own version, so a lint count measured in
 # the container describes what the phone will see.
 [dependency-groups]
-dev = ["pytest>=8"]
+# pyte is a terminal emulator in pure Python, and it is here for one reason:
+# the front ends ARE their screens, and the failures worth catching — a page
+# that leaves when it should stay, a sentence clipped over the keys — are only
+# visible on one. The suite opens the real screen on a pty and reads what a
+# terminal would have shown. Pure Python, so it installs on the phone too.
+dev = [
+    "pyte>=0.8.2",
+    "pytest>=8",
+]
 lint = ["ruff==0.16.4"]

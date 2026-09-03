@@ -130,21 +130,35 @@ Decisions that travel with this code — each was arrived at the hard way:
   at the top of a firing nobody is watching, and a stray character typed into
   the file must not be able to stop a night's downloads or take out the
   reserve on its way past — `dlq settings` and `dlq dump` name what they
-  declined instead. **Reading a broken `config.json` is forgiving; writing
-  over one is refused** — `load_config` answers a file that will not parse
-  with an empty dict, so a save on top of it would be a fresh file holding
-  only the new key, with the destinations and the other settings gone under a
-  line saying it worked. `config_problem` is the one line that says so:
+  declined instead. **A change stays on the page and is said there**: the
+  screen used to return on the first one, which put somebody back on the
+  listing they had not asked for, one keypress into a page of six settings,
+  with the change's own sentence — 67 columns of it — clipped onto the row the
+  legend keys sit on. Both pages stay now, redraw, and say what happened in a
+  **said area** under the rows (`said_lines`, wrapped, in the flash tone); the
+  foot goes on carrying the hints and nothing but each screen's own one-line
+  refusals, so no sentence is ever both clipped and whole. What comes back is
+  the **receipts** — a list, `dest_screen`'s handed up to `settings_screen`
+  and `settings_screen`'s extending the listing's — and the tonight reading is
+  re-asked once, on the way out, rather than at every change. **Reading a
+  broken `config.json` is forgiving; writing over one is refused** —
+  `load_config` answers a file that will not parse with an empty dict, so a
+  save on top of it would be a fresh file holding only the new key, with the
+  destinations and the other settings gone under a line saying it worked.
+  `config_problem` is the one line that says so:
   `set_setting` and `set_dest` refuse with it and write nothing, and both
   screens and the dump print it. Six settings do not fit a 20-row phone, so
   `settings_body` — the one rule, checked rather than trusted — gives up the
-  blank lines between the blocks first and then the grey line saying what each
-  setting means, never a setting's name, its value or a red line naming a
-  stored value being ignored. And **whether a stored value is in force is one
-  function's answer** — `setting_state`, keyed on the key being *present*,
-  because the three places that show the settings each used to decide it and a
-  file holding `null` read as refused on the screen and as nothing at all from
-  the command. The reserve is waived on `paid.left_bytes` alone, never on
+  blank lines between the blocks first, then the grey line saying what each
+  setting means, and last the said area, never a setting's name, its value or
+  a red line naming a stored value being ignored. The said area goes last of
+  the three and not first: dropping it first would leave the 20-row phone that
+  most needs the sentence the one screen that never shows it. And **whether a
+  stored value is in force is one function's answer** — `setting_state`, keyed
+  on the key being *present*, because the three places that show the settings
+  each used to decide it and a file holding `null` read as refused on the
+  screen and as nothing at all from the command. The reserve is waived on
+  `paid.left_bytes` alone, never on
   `free.left_bytes`, because `paid.left_bytes` can only understate what is
   actually paid for while `free.left_bytes` can only overstate what is
   actually free — "there is paid data" is the one direction that reading
@@ -197,16 +211,32 @@ Decisions that travel with this code — each was arrived at the hard way:
 `make test` (pytest) = `make check` (`.githooks/checks.sh`, the one copy; the
 pre-push hook runs it). Offline, and they need the sibling checkouts.
 
-**There are no tests right now.** Every module's `--self-test` was deleted
+**The suite is being rebuilt.** Every module's `--self-test` was deleted
 outright on 2026-09-02 — the functions, the `--self-test` flags, the pytest
 shim over them and the completion entry — so that the whole thing can be
-rebuilt as a real pytest suite under `tests/`. Until that lands `checks.sh`
-reads pytest's exit 5 as "no tests yet" and passes, which is what keeps the
-interim commits pushable; the suite tightens it.
+rebuilt as a real pytest suite under `tests/`. What is there so far is
+`tests/test_settings_screen.py`, which came in with the fix it pins; while
+`tests/` is still thin `checks.sh` goes on reading pytest's exit 5 as "no
+tests yet" and passing, which is what keeps the interim commits pushable.
 
-What the suite has to cover, when it is written: the clock pinned and the
-timezone swept either side of the date line (the vessel changes zone, never
-the clock); `expire_dl` fetching a file smaller than one chunk rather than
+**A screen is checked on a screen.** The front ends *are* their screens, and
+the failures worth catching there — a page that leaves when it should stay, a
+sentence clipped over the keys — do not show in a return value. The settings
+test opens the real `dlq ui` on a pty and reads it back through `pyte` (the
+one dev dependency that is not pytest), pointing `EXPIRE_HOME` at a temporary
+copy of the checkout and `HOME` at the same temporary directory, which is what
+keeps it offline: `zwana_quota`'s `.env` lives under `HOME`, so with no
+credentials anywhere the portal is never called. Its assertions are on the
+shape of the screen — which row, which keys, which page — and its one text
+comparison reads the hints out of `expire_ui.hint`, so a reworded hint stays
+a hint and only a mangled one fails. `pyte` answers neither `CSI S` nor
+`CSI T`, which is how ncurses scrolls a region to reuse lines, so the test
+teaches it both: without them the emulator keeps text a terminal has already
+scrolled away and the assertions read a page nobody was ever shown.
+
+What the rest of the suite has to cover, when it is written: the clock pinned
+and the timezone swept either side of the date line (the vessel changes zone,
+never the clock); `expire_dl` fetching a file smaller than one chunk rather than
 declining it; the `expire_ui` moves done on a real temporary queue read
 through the real reader (the silent failures are bytes losing their item and
 a download missing from the screen it is removed from); and both front ends'

@@ -1875,9 +1875,15 @@ def list_screen(
             queue.read()
             queue.tonight.start()
         elif key == ord("s"):
-            flash, changed = settings_screen(win, paint)
-            if changed:
-                queue.receipts.append(flash)
+            # What comes back is the receipts, not a sentence to print here:
+            # the settings page says what it did on its own rows, where there
+            # is room to say it whole, and this screen is left as it was found
+            # — legend keys and all — rather than wearing a clipped message
+            # about a page somebody has already left.
+            changes = settings_screen(win, paint)
+            flash = ""
+            if changes:
+                queue.receipts += changes
                 # The window, the reserve and the switch all change what
                 # tonight would download, so the line above the list is wrong
                 # until it has been asked again.
@@ -2780,7 +2786,7 @@ def runner_log(win, paint) -> None:
 DEST_KEYS = (ord("v"), ord("a"), ord("f"))
 
 
-def dest_screen(win, paint: dict) -> tuple[str, bool]:
+def dest_screen(win, paint: dict) -> list[str]:
     """Where finished downloads go — every destination, and any one changed.
 
     The only setting the queue has, and the last thing that could be changed
@@ -2788,9 +2794,20 @@ def dest_screen(win, paint: dict) -> tuple[str, bool]:
     the default is Android's Downloads, which does not exist until
     ``termux-setup-storage`` has been run, and a destination that cannot be
     written to is a download that finishes and then stays in ``out/``.
+
+    The settings page's rule, one level down: a change **stays here**, the
+    three rows are redrawn with the new folder on them, and what happened is
+    said in the said area under them (:func:`said_lines`) rather than clipped
+    onto the flash row a page up. Only ``q`` leaves, and what it hands back is
+    the receipts — one sentence per change that took — for the settings page to
+    add to its own. The rows come first when the screen is short, exactly as
+    they do above: a folder nobody can see is worse than a sentence nobody
+    sees, since the sentence is about a folder that is on the screen anyway.
     """
     runner = sched._runner()
     flash = ""
+    said = ""
+    receipts: list[str] = []
     while True:
         win.erase()
         height, width = win.getmaxyx()
@@ -2821,18 +2838,27 @@ def dest_screen(win, paint: dict) -> tuple[str, bool]:
                     _addstr(win, line, 4, text, paint.get("31", 0))
                     line += 1
             line += 1
+        for indent, text, tone in said_lines(said, width):
+            if line >= height - 4:
+                break
+            _addstr(win, line, indent, text, paint.get(tone, 0))
+            line += 1
         _foot(win, paint, flash, hint("dest", width))
         win.refresh()
         key = win.getch()
         if key in (ord("q"), 27, curses.KEY_LEFT):
-            return flash, False
+            return receipts
         # Zipped rather than indexed, which is what let `audio` be added on
         # 2026-08-28 by extending one tuple: a destination past the end of the
         # key map makes it short rather than raising, and the screen goes on
         # working for the ones it knows. The hint names the same keys.
         picked = dict(zip(DEST_KEYS, kinds, strict=False)).get(key)
         if picked is None:
+            # The flash row keeps this screen's own one-liners and nothing
+            # else; the said area is cleared with it, so the screen never says
+            # two things in two places at once.
             flash = "that key does nothing here" if 32 <= key < 127 else ""
+            said = ""
             continue
         typed = ask(
             win,
@@ -2844,13 +2870,13 @@ def dest_screen(win, paint: dict) -> tuple[str, bool]:
             "back. One level is created if it is not there.",
         )
         if not typed:
-            flash = "left where it was"
+            flash, said = "left where it was", ""
             continue
-        worked, said = sched.set_dest(picked, typed)
-        flash = said[-1] if said else ""
+        worked, told = sched.set_dest(picked, typed)
+        flash, said = "", told[-1] if told else ""
         if worked:
             _note(f"{picked} downloads now go to {runner.dests()[picked]}")
-            return flash, True
+            receipts.append(said)
 
 
 #: One key per setting, in :data:`expire_runner.SETTINGS` order, and the same
@@ -2985,10 +3011,40 @@ def settings_lines(
     return lines
 
 
+#: How many lines the said area is given. Three hold the longest sentence a
+#: setting has to say on a 40-column phone; a fourth would be a page whose foot
+#: moves about as the sentences change length.
+SAID_LINES = 3
+
+#: The said area's tone — the flash row's own, because it is the same thing
+#: being said, in the one place there is room to say it whole.
+SAID_TONE = "1;33"
+
+
+def said_lines(said: str, width: int) -> list[tuple[int, str, str]]:
+    """What just changed, wrapped, as body lines: the **said area**.
+
+    Wrapped on the page rather than clipped onto the foot's flash row, because
+    the sentence *is* the answer. "auto: off — the nightly job fires and does
+    nothing; run-now still works" is 67 columns and a phone shows 38 of them,
+    so the flash row said "auto: off — the nightly job fires and does…" — the
+    half that does not say what it means, printed over the legend besides.
+
+    Empty for an empty sentence, so a page with nothing to say lays down
+    nothing rather than a blank line where a sentence would have been.
+    """
+    if not said:
+        return []
+    return [(2, text, SAID_TONE) for text in _wrap(said, width - 4, "  ")[:SAID_LINES]]
+
+
 def settings_body(
-    width: int, height: int, job: list[tuple[str, str, str]] | None = None
+    width: int,
+    height: int,
+    job: list[tuple[str, str, str]] | None = None,
+    said: str = "",
 ) -> list[tuple[int, str, str]]:
-    """:func:`settings_lines` cut down to what a screen this tall can show.
+    """:func:`settings_lines`, plus the said area, cut to a screen this tall.
 
     The screen's own rule, kept out here so it is checked rather than trusted:
     the failure it exists for is a setting scrolling off the bottom, which is a
@@ -2996,15 +3052,18 @@ def settings_body(
     sits under ``auto``, which is the one that stops the queue downloading at
     all.
 
-    Two things are given up, in this order. The blank lines between the blocks
-    go first, because they cost nothing but air. If it still does not fit —
-    which is a 20-row phone at 32 columns, where eight rows' meanings wrap to
-    two lines each — the grey line under each row goes too, and what is left is
-    every row's key, name and value, plus anything red. That is the trade this
-    screen makes: the word behind a value ("set" or "default") and what the
-    setting means are worth giving up, since the meaning is in the docs and on
-    the wide screen; a figure the phone is going to spend by, and a value
-    ``config.json`` holds that is being ignored, are not.
+    Three things are given up, in this order. The blank lines between the
+    blocks go first, because they cost nothing but air. Then the grey line
+    under each row — which is a 20-row phone at 32 columns, where eight rows'
+    meanings wrap to two lines each. Last of the three, and only then, the said
+    area. It goes after the meanings rather than before them because it is the
+    reason the page stayed: giving it up first would leave the phone that most
+    needs the sentence the one screen that never shows it, while the meaning of
+    a setting is in the docs and on the wide screen. It still goes **before any
+    row's key, name or value and before anything red**, which is the trade this
+    screen makes and does not vary: a figure the phone is going to spend by,
+    and a value ``config.json`` holds that is being ignored, outrank a message
+    about something that has already happened.
 
     ``d`` and ``j`` count as settings here: they are not in ``config.json``,
     but a row nobody knows is there is the same failure whichever file it comes
@@ -3012,15 +3071,20 @@ def settings_body(
     at all.
     """
     body = settings_lines(width, job)
+    told = said_lines(said, width)
+    if told:
+        body += [(0, "", ""), *told]
     room = height - 6
     if len(body) > room:
         body = [line for line in body if line[1]]
     if len(body) > room:
         body = [line for line in body if line[2] != "90"]
+    if len(body) > room:
+        body = [line for line in body if line[2] != SAID_TONE]
     return body
 
 
-def settings_screen(win, paint: dict) -> tuple[str, bool]:
+def settings_screen(win, paint: dict) -> list[str]:
     """What the queue may spend and how early — the settings that change it.
 
     :func:`dest_screen`'s shape, over the settings rather than the
@@ -3036,20 +3100,29 @@ def settings_screen(win, paint: dict) -> tuple[str, bool]:
     and the note says so along with the way to put the built-in one back,
     which is the word ``default`` typed into the same field.
 
-    A change returns, the way a destination does, so that what it now says
-    lands in the receipts and the listing's header is re-read with it in force:
-    turning automatic downloads off changes the verdict at the top of that
-    screen, and it should be seen to.
+    **A change stays on this page**, redrawn with the new value, and says what
+    it did in the said area under the rows. It used to return on the first
+    change — which put somebody back on the listing they did not ask for, with
+    a sentence too long for the flash row clipped over the legend keys, one
+    keypress into a page of six settings they had come to set. Nothing else
+    was wrong with it: the receipt, the log line and the re-read of tonight all
+    still happen, just at ``q`` rather than at the first change.
 
-    ``d`` and ``j`` are the two rows that are not values in ``config.json``.
-    They do not return, because what they change is *on this page* — the
-    destinations row and the job row are what they change — so the answer is
-    shown where the question was asked, and the receipt is carried out on the
-    way past instead.
+    What comes back is therefore the **receipts** — one sentence per change
+    that took, in the order they were made, for the caller to add to the
+    session's and print once curses is down. An empty list is a page that
+    changed nothing, which is also what tells the listing there is nothing to
+    re-read tonight's reading for.
+
+    ``d`` and ``j`` are the two rows that are not values in ``config.json``,
+    and they come back here the same way: the destinations page hands up its
+    own receipts, the job's confirm and its ``waiting()`` screen happen where
+    they always did, and the page they leave is this one with the answer on it.
     """
     runner = sched._runner()
     flash = ""
-    changed = False
+    said = ""
+    receipts: list[str] = []
     state, job = waiting(
         win, paint, " settings ", "asking Android's scheduler…", sched.job_rows
     )
@@ -3061,7 +3134,7 @@ def settings_screen(win, paint: dict) -> tuple[str, bool]:
         height, width = win.getmaxyx()
         _bar(win, paint, " settings ")
         line = 2
-        body = settings_body(width, height, job)
+        body = settings_body(width, height, job, said)
         for indent, text, tone in body:
             if line >= height - 4:
                 break
@@ -3070,11 +3143,14 @@ def settings_screen(win, paint: dict) -> tuple[str, bool]:
                 attr |= curses.A_BOLD
             _addstr(win, line, indent, text, attr)
             line += 1
+        # The foot is the hints and nothing else but the screen's own two
+        # one-line refusals: everything a setter or a page said is wrapped in
+        # the said area above, so no sentence is ever both clipped and whole.
         _foot(win, paint, flash, hint("settings", width))
         win.refresh()
         key = win.getch()
         if key in (ord("q"), 27, curses.KEY_LEFT):
-            return flash, changed
+            return receipts
         if key in PAGE_KEYS:
             # Off the same tuple the two rows are laid out from and the hints
             # are spelled from. It was two literals, and a key that moved in
@@ -3084,34 +3160,46 @@ def settings_screen(win, paint: dict) -> tuple[str, bool]:
             # rather than becoming a key nothing answers.
             dest_key, job_key = PAGE_KEYS
             if key == dest_key:
-                said, worked = dest_screen(win, paint)
+                got = dest_screen(win, paint)
+                receipts += got
+                # The destinations page says its own changes on its own rows;
+                # what this page shows is the last of them, since that row is
+                # the one that just moved.
+                flash, said = "", got[-1] if got else ""
             else:
-                said, worked = (
+                text, worked = (
                     cancel_job(win, paint, job) if armed(job) else arm_job(win, paint)
                 )
-            flash, changed = said, changed or worked
-            if worked and key == job_key:
-                # The row above says whether it is armed, and the answer just
-                # moved: ask the scheduler again rather than draw the old one.
-                state, fresh = waiting(
-                    win,
-                    paint,
-                    " settings ",
-                    "asking Android's scheduler…",
-                    sched.job_rows,
-                )
-                job = fresh if state == "ok" else job
+                flash, said = "", text
+                if worked:
+                    receipts.append(text)
+                    # The row above says whether it is armed, and the answer
+                    # just moved: ask the scheduler again rather than draw the
+                    # old one.
+                    state, fresh = waiting(
+                        win,
+                        paint,
+                        " settings ",
+                        "asking Android's scheduler…",
+                        sched.job_rows,
+                    )
+                    job = fresh if state == "ok" else job
             continue
         picked = dict(zip(SETTING_KEYS, runner.SETTINGS, strict=False)).get(key)
         if picked is None:
+            # One of the two things this screen says for itself, and both are
+            # short enough for the flash row. The said area is cleared with it:
+            # a key that did nothing over a sentence about the last change that
+            # did is a screen saying two things at once.
             flash = "that key does nothing here" if 32 <= key < 127 else ""
+            said = ""
             continue
         spec = runner.SETTINGS[picked]
         value = runner.settings()[picked]
         if spec["kind"] == "bool":
             # The word it is *not*, said in the setting's own pair, so the
             # setter parses exactly what the screen would have printed.
-            worked, said = sched.set_setting(
+            worked, told = sched.set_setting(
                 picked, spec["words"][1] if value else spec["words"][0]
             )
         else:
@@ -3127,14 +3215,17 @@ def settings_screen(win, paint: dict) -> tuple[str, bool]:
                 "the field. Type default to put the built-in one back.",
             )
             if not typed:
-                flash = "left as it was"
+                flash, said = "left as it was", ""
                 continue
-            worked, said = sched.set_setting(picked, typed)
-        flash = said[-1] if said else ""
+            worked, told = sched.set_setting(picked, typed)
+        # Taken or refused, the setter's last sentence goes in the said area:
+        # a refusal says which figures were allowed, and that is the sentence
+        # somebody is about to type against.
+        flash, said = "", told[-1] if told else ""
         if worked:
             now = runner.spell_setting(picked, runner.settings()[picked])
             _note(f"{picked} is now {now}")
-            return flash, True
+            receipts.append(said)
 
 
 #: Keys the *screen* handles rather than the item: moving a download is the one
