@@ -667,3 +667,30 @@ def test_what_an_item_owns_is_decided_in_one_place(dlq):
     # night, and the runner's own log names the item in prose anyway.
     for _, path in dlq.ui.belongings(row):
         assert path.parent != dlq.root / "logs"
+
+
+# --------------------------------------------------------------------------- #
+# Open when done
+# --------------------------------------------------------------------------- #
+
+
+def test_o_asks_for_the_file_only_on_a_download_this_screen_started(dlq):
+    """The ask is held in memory by the ``ytq.Running`` watching the download,
+    so it is offered only where there is one: this screen's own download of
+    this item, while it runs. Pressed again, the label says it takes it back."""
+    dlq.item("10-queued.py")
+    row = next(row for row in dlq.sched.items() if row["name"] == "10-queued.py")
+
+    class Run:
+        askable, name, open_when_done = True, "10-queued.py", False
+
+    run = Run()
+    offer = dlq.ui.open_offer(row, run)
+    assert offer and "o" not in {key for key, _ in dlq.ui.actions_for(row)}
+    run.open_when_done = True
+    assert dlq.ui.open_offer(row, run) not in ("", offer)
+
+    run.name = "20-other.py"  # ours, but another item
+    assert dlq.ui.open_offer(row, run) == ""
+    run.name, run.askable = "10-queued.py", False  # ended, stopped, or not ours
+    assert dlq.ui.open_offer(row, run) == ""

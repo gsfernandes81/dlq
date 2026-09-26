@@ -345,7 +345,7 @@ was changed is printed on the terminal on the way out.
 | `u` | put a failed download back, with its three nights again |
 | `t` | clear the failed nights counted against it |
 | `r` | rename it |
-| `o` | open the finished file |
+| `o` | open the finished file — or, while a download started here with `n` runs, open it when it is done (again to stop asking; only while `dlq` stays open, and never for a run that stops short) |
 | `l` | that item's own log, from its last night |
 | `d` | remove it from the list |
 

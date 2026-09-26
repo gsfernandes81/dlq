@@ -836,6 +836,24 @@ def actions_for(row: dict) -> list[tuple[str, str]]:
     return offered
 
 
+def open_offer(row: dict, running) -> str:
+    """The label ``o`` carries while this screen's own download of *row*
+    runs, or ``""``.
+
+    ``o`` is "open the file" once there is one; while the bytes move it asks
+    for the file to be opened when it lands. Only for a download this screen
+    started, because the ask is held in memory by the :class:`ytq.Running`
+    watching it: a nightly run, or a ``dlq now`` somewhere else, has nobody
+    here to answer it. Closing ``dlq`` drops the ask, and a run stopped or cut
+    short never opens anything.
+    """
+    if row["files"] or not (running.askable and running.name == row["name"]):
+        return ""
+    if running.open_when_done:
+        return "don't open it when done"
+    return "open it when done"
+
+
 def progress_bar(have: int, total: int, width: int) -> str:
     """``[====····] 44%`` — the queue's one visual for how far in a download is.
 
@@ -1985,6 +2003,7 @@ def item_screen(win, paint: dict, queue, row: dict, flash: str) -> str:
         # two can never be a second apart from each other.
         downloading = queue.downloading(row["name"])
         reading = ytq.now_progress(row["name"]) if downloading else None
+        opening = open_offer(row, queue.running)
         line = 2
         for text in item_lines(
             row, width, queue.place(row["name"]), downloading, reading
@@ -1994,7 +2013,7 @@ def item_screen(win, paint: dict, queue, row: dict, flash: str) -> str:
             _addstr(win, line, 2, text)
             line += 1
         line += 1
-        for key, label in keys.items():
+        for key, label in [*keys.items(), *([("o", opening)] if opening else [])]:
             if line >= height - 4:
                 break
             _addstr(win, line, 2, key, curses.A_BOLD | paint.get("head", 0))
@@ -2009,16 +2028,22 @@ def item_screen(win, paint: dict, queue, row: dict, flash: str) -> str:
             live = progress_bar(shown["have"], shown["total"], width - 2)
         else:
             live = queue.live_line(width)
+        # What an ask made here came to — opened, or why not — once the run
+        # it was made of has ended. Said until something else is.
+        ours = queue.running.name == row["name"]
         _foot(
             win,
             paint,
-            flash,
+            flash or (queue.running.opened if ours else ""),
             hint("item-live" if queue.mine() else "item", width),
             live,
         )
         win.refresh()
 
-        win.timeout(1000 if queue.moving() else -1)
+        # Kept waking after our download ends until its outcome is known, or
+        # the line above would wait for a keypress to say it.
+        settling = ours and not queue.running.settled
+        win.timeout(1000 if queue.moving() or settling else -1)
         try:
             key = win.getch()
         finally:
@@ -2029,6 +2054,9 @@ def item_screen(win, paint: dict, queue, row: dict, flash: str) -> str:
             return "q"
         if key == ord("x") and queue.mine():
             flash = queue.stop_mine()
+            continue
+        if key == ord("o") and opening:
+            flash = queue.running.toggle_open()
             continue
         if 0 <= key < 256 and chr(key) in keys:
             return chr(key)
