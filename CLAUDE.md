@@ -37,6 +37,11 @@ Decisions that travel with this code — each was arrived at the hard way:
   both), so the cut line answers with the new item counted in the place it is
   being dragged to; it writes nothing, and `place` takes the place afterwards
   through `do_reorder`.
+- **Done is newest first** (2026-10-08) — `_paths` orders `done/` by
+  `_finished_order`: the day directory, then the item file's `st_ctime`
+  (it arrives by rename, so that is when it finished — which is what lets
+  downloads archived before this was written sort too, with nothing new
+  recorded), then the name, since a firing runs items in name order.
 - **`run-now` carries `--force`**, and that is what makes now mean now: it
   overrides the clock gate and nothing else — the floor, the per-item caps and
   the portal reading still decide everything they decided.

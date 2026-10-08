@@ -458,6 +458,10 @@ def _paths() -> list[tuple[str, Path]]:
     which is history. ``done/`` is a tree of day directories, the other two are
     flat, and ``queue/.staging`` holds half-written files that are deliberately
     not items yet — one walk with one dot rule covers all three.
+
+    Done is newest first (:func:`_finished_order`): history is read from the
+    end that just happened, and in name order last night's film sits under
+    every download of the summer.
     """
     found: list[tuple[str, Path]] = []
     seen: set[str] = set()
@@ -466,6 +470,8 @@ def _paths() -> list[tuple[str, Path]]:
             walked = sorted(root.rglob("*"))
         except OSError:
             continue
+        if where == "done":
+            walked = _finished_order(root, walked)
         for path in walked:
             if any(part.startswith(".") for part in path.relative_to(root).parts):
                 continue
@@ -479,6 +485,30 @@ def _paths() -> list[tuple[str, Path]]:
             seen.add(path.name)
             found.append((where, path))
     return found
+
+
+def _finished_order(root: Path, walked: list[Path]) -> list[Path]:
+    """``done/``'s files, the most recently finished first.
+
+    The day directory the runner archived into is the date, and it comes
+    first because it is the one thing nothing else touches. Within a day it is
+    the file's ``st_ctime``: the item arrives in ``done/`` by a rename, and a
+    rename is a change to the inode, so that is the moment it finished — which
+    is why this works for every download already there, with nothing recorded
+    for it. The name breaks a tie the clock's granularity leaves: a firing
+    runs its items in name order, so the later name finished later.
+    """
+
+    def finished(path: Path) -> tuple[str, float, str]:
+        parts = path.relative_to(root).parts
+        day = parts[0] if len(parts) > 1 else ""
+        try:
+            changed = path.stat().st_ctime
+        except OSError:
+            changed = 0.0
+        return (day, changed, path.name)
+
+    return sorted(walked, key=finished, reverse=True)
 
 
 def _is_payload(name: str) -> bool:

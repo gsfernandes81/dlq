@@ -251,7 +251,8 @@ aside for you.
 in progress. It exits non-zero when it prints a `BROKEN` line.
 
 `dlq list` is the "where is everything" answer — queued, failed and done in
-that order, with what is on the disk against what it is going to be:
+that order, done newest first, with what is on the disk against what it is
+going to be:
 
 ```
 queued (2)

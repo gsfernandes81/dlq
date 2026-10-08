@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 
 import pytest
 
@@ -69,6 +70,32 @@ def test_the_three_places_a_download_can_be(dlq):
     rows = dlq.sched.items()
     assert [row["where"] for row in rows] == ["queued", "failed", "done"]
     assert named(rows) == ["20-queued.py", "30-failed.py", "10-done.py"]
+
+
+def test_done_is_newest_first(dlq):
+    """History is read from the end that just happened.
+
+    The day directory is the date; within one day it is the moment the item
+    was renamed into ``done/``, which is when it finished — not its name,
+    which is the order it was queued in.
+    """
+    dlq.item("10-summer.py", where="done/2026-07-01")
+    dlq.item("90-august.py", where="done/2026-08-15")
+    dlq.item("50-first.py", where="done/2026-09-01")
+    dlq.item("20-second.py")
+    # Past the filesystem clock's granularity, so the two are told apart by
+    # when they arrived rather than by the name that breaks a tie.
+    time.sleep(0.05)
+    (dlq.root / "queue" / "20-second.py").rename(
+        dlq.root / "done" / "2026-09-01" / "20-second.py"
+    )
+    rows = [row for row in dlq.sched.items() if row["where"] == "done"]
+    assert named(rows) == [
+        "20-second.py",
+        "50-first.py",
+        "90-august.py",
+        "10-summer.py",
+    ]
 
 
 def test_nothing_that_is_not_an_item_is_listed(dlq):
