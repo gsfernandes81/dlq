@@ -76,6 +76,9 @@ def sibling(name: str, env: str) -> Path:
 
 YTQ = sibling("ytq", "YTQ_HOME")
 ZWANA = sibling("zwana-quota", "ZWANA_HOME")
+#: ytq draws through bewitch's curses stand-in when there is a bewitch
+#: checkout, and so does this screen, through ytq.
+BEWITCH = sibling("bewitch", "BEWITCH_HOME")
 
 
 def make_root(where: Path, items: dict[str, str] | None = None) -> Path:
@@ -122,6 +125,7 @@ def env(root: Path, home: Path, cols: int = 40, rows: int = 24) -> dict[str, str
             "EXPIRE_HOME": str(root),
             "YTQ_HOME": str(YTQ),
             "ZWANA_HOME": str(ZWANA),
+            "BEWITCH_HOME": str(BEWITCH),
             "HOME": str(home),
             "TERM": "xterm-256color",
             "LINES": str(rows),

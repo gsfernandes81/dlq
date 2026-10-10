@@ -61,7 +61,6 @@ are the line that must never be the one clipped — they are the way out.
 
 from __future__ import annotations
 
-import curses
 import os
 import re
 import shutil
@@ -77,6 +76,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import expire_sched as sched  # noqa: E402  (sibling module, path fixed up above)
 import ytq  # noqa: E402  (reachable because expire_sched put its checkout on sys.path)
 import contextlib
+
+#: The curses this screen draws with is ytq's, never its own: ``pick_place``
+#: runs inside ytq's session, so the two must be one implementation —
+#: bewitch's stand-in where the bewitch checkout is, the standard library's
+#: where it is not. ytq decides which, in one place.
+curses = ytq.curses
 
 #: What a row says is said the same way ``dlq list`` says it, by calling the
 #: same functions rather than by respelling them: the state, the progress, the

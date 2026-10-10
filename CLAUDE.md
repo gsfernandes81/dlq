@@ -15,6 +15,14 @@ import traceback.
 
 Decisions that travel with this code — each was arrived at the hard way:
 
+- **The screen draws through bewitch, by way of ytq** (2026-10-10, branch
+  `bewitched`). `expire_ui` has no `import curses`: it takes `curses =
+  ytq.curses`, which is `bewitch.cursed` where a bewitch checkout is found
+  (`$BEWITCH_HOME`, beside, `~/bewitch`) and the standard library's curses
+  where none is. One implementation for both, because `pick_place` runs
+  inside ytq's session. `tests/_pty.py` passes `BEWITCH_HOME` to the children
+  with the other siblings.
+
 - **`dlq` typed on its own opens the screen** — `default_action`, whose other
   half is the half to keep pinned: with no terminal (a pipe, a script, ssh
   with no tty) it is `status`, which is what a bare `dlq` always printed.
