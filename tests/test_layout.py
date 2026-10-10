@@ -333,11 +333,18 @@ def test_the_key_hints_fit_and_always_say_the_way_out(dlq, width):
 
 @pytest.mark.parametrize("width", WIDTHS)
 def test_the_legend_names_the_keys_the_listing_answers_to(dlq, width):
-    """One spelling at every width — at 28 characters it already fits the
-    narrowest phone, so there is nothing for a tight version to give up."""
-    assert len(dlq.ui.LEGEND_KEYS) <= 32 - 2
+    """One spelling at every width — at 30 columns, dots and all, it already
+    fits the narrowest phone, so there is nothing for a tight version to give
+    up. Asked of the row as it is drawn, which is what a person reads."""
+    drawn = dlq.ui.legend(width)
+    assert drawn == dlq.ui.legend(32)
+    assert len(drawn) <= 32 - 2
     for letter in ("n", "s", "l"):
-        assert f"{letter} " in dlq.ui.LEGEND_KEYS
+        assert f"{letter} " in drawn
+    # Every pair is there whole: the legend is three keys, and the one cut off
+    # would be a key nobody knows the listing answers to.
+    for key, what in dlq.ui.LEGEND_KEYS:
+        assert f"{key} {what}" in drawn
 
 
 # --------------------------------------------------------------------------- #
@@ -380,9 +387,10 @@ def test_wrapping_always_gives_back_at_least_one_line(dlq, text, width):
 
 
 def test_a_bar_is_drawn_in_characters_a_phone_cannot_widen(dlq):
-    """``=`` against ``·``, never block glyphs: they are East-Asian *ambiguous*
-    width, and a terminal that renders them double leaves the bar a column
-    wider than it was measured at."""
+    """The plain fallback's bar: ``=`` against ``·``, never block glyphs — a
+    terminal with no bewitch behind it is one nobody has checked them on, and
+    one that renders them double leaves the bar a column wider than it was
+    measured at. The house style's bar is ``test_look``'s to pin."""
     for width in range(12, 60):
         bar = dlq.ui.progress_bar(3, 4, width)
         assert len(bar) <= width

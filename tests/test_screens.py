@@ -72,11 +72,18 @@ def test_the_cut_line_is_drawn_through_the_queued_group(pty_root):
     shots, _ = drive(root, pty_root.home, 40, 24, [DOWN, b"q"])
     listing = shots[1]
 
-    ruled = [line for line in listing if "─" in line]
+    # Every heading is a rule now — the group's own, ``queued ──── 3``, is a
+    # section like the cut line — so the cut line is the first rule *after*
+    # the one that names the queued group.
+    heading = next(
+        at for at, line in enumerate(listing) if line.split()[:1] == ["queued"]
+    )
+    assert "─" in listing[heading], listing
+    ruled = [at for at, line in enumerate(listing) if "─" in line and at > heading]
     assert ruled, listing
     # It is drawn *inside* the queued group: above the first download and below
     # the heading that counts them.
-    where = listing.index(ruled[0])
+    where = ruled[0]
     assert where < listing.index(row_with(listing, "alpha"))
     assert "queued" in "\n".join(listing[:where])
 

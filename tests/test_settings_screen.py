@@ -184,7 +184,7 @@ def test_changing_a_setting_stays_on_the_settings_page(
 
     # q leaves, and the listing is the listing again — legend keys and all.
     assert "queue" in back[0]
-    assert back[-3].strip() == expire_ui.LEGEND_KEYS
+    assert back[-3].strip() == expire_ui.legend(cols)
     for letter in ("n", "s", "l"):
         assert f"{letter} " in back[-3]
     assert back[-2].strip() == expire_ui.hint("list", cols).strip()

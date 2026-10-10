@@ -76,6 +76,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import expire_sched as sched  # noqa: E402  (sibling module, path fixed up above)
 import ytq  # noqa: E402  (reachable because expire_sched put its checkout on sys.path)
 import contextlib
+import functools
 
 #: The curses this screen draws with is ytq's, never its own: ``pick_place``
 #: runs inside ytq's session, so the two must be one implementation —
@@ -102,28 +103,31 @@ _wrap = sched._wrap
 WIDE = sched.WIDE
 
 #: The key hints, and the room they get, at the two widths the rest of the
-#: queue uses. Drawn at x=1 and clipped at ``width - 1``, so a 40-column phone
-#: shows 38 columns of them. What is dropped when the screen is narrower is
-#: chosen on ytq's rule: the word that must never be clipped is the way out.
+#: queue uses: ``(key, what it does)`` pairs, drawn by ``bubbles.short_help``
+#: at x=1 and in ``width - 2`` columns, so a 40-column phone shows 38 columns of
+#: them. What is dropped when the screen is narrower is chosen on ytq's rule:
+#: the word that must never be clipped is the way out, which is why it is the
+#: last pair of every set — and why every set is measured to fit whole, since
+#: the pair ``short_help`` gives up when one does not fit is the last one.
 HINTS = {
     # No `s queue` any more: the listing IS the queue's screen, and what `s`
     # opens is the settings. The keys that act on the whole queue are named on
     # the legend row instead (:data:`LEGEND_KEYS`), which leaves this line to
     # the four that work the list itself.
-    "list": "↑↓ pick  ⏎ open  m move  q",
-    "list-live": "x stop  ⏎ open  m move  q",
-    "moving": "↑↓ move it   ⏎ drop it   esc cancel",
+    "list": (("↑↓", "pick"), ("⏎", "open"), ("m", "move"), ("q", "")),
+    "list-live": (("x", "stop"), ("⏎", "open"), ("m", "move"), ("q", "")),
+    "moving": (("↑↓", "move it"), ("⏎", "drop it"), ("esc", "cancel")),
     # The same screen with an item that does not exist yet held on it — ytq
     # asking where a video it is about to write should go. Its own pair rather
     # than "moving"'s, because nothing is being dropped and nothing is being
     # cancelled: what ⏎ takes is a place, and esc leaves the video where it
     # would have gone anyway, which is last.
-    "pick": "↑↓ move it  ⏎ take the place  esc no",
-    "item": "press a key   q back",
+    "pick": (("↑↓", "move it"), ("⏎", "take the place"), ("esc", "no")),
+    "item": (("press a key", ""), ("q", "back")),
     # The download-now screen promises that x stops it, so x has to work on
     # the screen it was promised from and not only on the listing.
-    "item-live": "x stop   press a key   q back",
-    "dest": "v video  a audio  f files  q back",
+    "item-live": (("x", "stop"), ("press a key", ""), ("q", "back")),
+    "dest": (("v", "video"), ("a", "audio"), ("f", "files"), ("q", "back")),
     # Every setting's key is named here rather than only on the screen: these
     # are the keys that spend or stop spending, and a key that is only
     # discoverable by pressing it is not one to leave to a guess. The names
@@ -132,34 +136,43 @@ HINTS = {
     # letter and this line is the only place the set of them is stated. ``d``
     # and ``j`` joined them when the queue screen went: they are rows on this
     # page now and they answer to keys like the rest of it.
-    "settings": "w r p m a n d j  a setting  q back",
-    "confirm": "y do it   any other key: no",
+    "settings": (("w r p m a n d j", "a setting"), ("q", "back")),
+    "confirm": (("y", "do it"), ("any other key:", "no")),
     # With a second answer offered, the hint has to admit it exists: "any other
     # key: no" over a screen showing a b is a screen contradicting itself.
-    "confirm-two": "a key above   any other: no",
-    "log": "↑↓ scroll   q back",
+    "confirm-two": (("a key above", ""), ("any other:", "no")),
+    "log": (("↑↓", "scroll"), ("q", "back")),
 }
 TIGHT_HINTS = {
-    "list": "↑↓  ⏎ open  m move  q",
-    "list-live": "x stop  ⏎ open  m  q",
-    "moving": "↑↓ move  ⏎ drop  esc no",
-    "pick": "↑↓ move  ⏎ take  esc no",
-    "item": "a key, or q back",
-    "item-live": "x stop  a key  q back",
-    "dest": "v vid  a aud  f file  q back",
+    "list": (("↑↓", ""), ("⏎", "open"), ("m", "move"), ("q", "")),
+    "list-live": (("x", "stop"), ("⏎", "open"), ("m", ""), ("q", "")),
+    "moving": (("↑↓", "move"), ("⏎", "drop"), ("esc", "no")),
+    "pick": (("↑↓", "move"), ("⏎", "take"), ("esc", "no")),
+    "item": (("press a key", ""), ("q", "back")),
+    "item-live": (("x", "stop"), ("a key", ""), ("q", "back")),
+    "dest": (("v", "vid"), ("a", "aud"), ("f", "file"), ("q", "back")),
     # The same letters, and "q back" is the one thing on this line that must
     # survive the narrow phone: the screen itself carries each letter beside
     # the setting it sets.
-    "settings": "press w r p m a n d j  q back",
-    "confirm": "y do it  else no",
-    "confirm-two": "a key above  else no",
-    "log": "↑↓ scroll  q back",
+    "settings": (("press w r p m a n d j", ""), ("q", "back")),
+    "confirm": (("y", "do it"), ("else", "no")),
+    "confirm-two": (("a key above", ""), ("else", "no")),
+    "log": (("↑↓", "scroll"), ("q", "back")),
 }
 
 
-def hint(name: str, width: int) -> str:
-    """The key hints for a screen, at whatever width there is for them."""
+def hint_pairs(name: str, width: int) -> tuple[tuple[str, str], ...]:
+    """The key hints for a screen, as pairs, for whatever width there is."""
     return (TIGHT_HINTS if width < ytq.TIGHT else HINTS)[name]
+
+
+def hint(name: str, width: int) -> str:
+    """The key hints for a screen as they are drawn, at whatever width there is.
+
+    The text of the line :func:`_help` draws — so a test reading the screen
+    back can compare its hint row with this and know it is the same line.
+    """
+    return help_text(hint_pairs(name, width), width - 2)
 
 
 #: The listing's whole body when there is nothing in the queue at all. A bare
@@ -168,20 +181,25 @@ def hint(name: str, width: int) -> str:
 #: the listing says it itself and every key on it goes on working.
 EMPTY_QUEUE = "nothing queued — ytq or dlq adds something"
 
-#: The three keys that act on the queue as a whole, spelled out on a dim row
+#: The three keys that act on the queue as a whole, spelled out on a quiet row
 #: of their own above the hints. They used to be a screen; the screen is gone
 #: and this line is what is left of its signposting.
 #:
-#: One spelling at every width: its budget is the hints' own — drawn at x=1
-#: and clipped at ``width - 1`` — and at 28 characters it already fits the
-#: narrowest phone, so there is nothing for a tight version to give up.
+#: One spelling at every width: its budget is the hints' own — drawn at x=1 in
+#: ``width - 2`` — and with its dots it is 30 columns, which is the narrowest
+#: phone's room exactly, so there is nothing for a tight version to give up.
 #:
 #: It gets the row the foot keeps for the live line, and gives it up to both
 #: of the things that outrank a signpost: **a download in flight takes it**,
 #: because what is being spent now is worth more than where a key goes, and
 #: **a flash takes it for the moment it is shown**, which is :func:`_foot`'s
 #: own rule that what just happened comes first.
-LEGEND_KEYS = "n run now  s settings  l log"
+LEGEND_KEYS = (("n", "run now"), ("s", "settings"), ("l", "log"))
+
+
+def legend(width: int) -> str:
+    """The legend row as it is drawn on a terminal *width* columns wide."""
+    return help_text(LEGEND_KEYS, width - 2)
 
 
 # --------------------------------------------------------------------------- #
@@ -762,19 +780,32 @@ def do_clear_tries(row: dict) -> str:
 
 _addstr = ytq._addstr
 
-#: The colours :func:`expire_sched._tone` asks for, as curses attributes.
-#: Keyed by the ANSI code that function returns, because that function is where
-#: the decision "what colour is this row worth" is made and this is only the
-#: translation of it — a tone missing from here is a row that loses its colour
-#: without anything saying so, which a test must pin against.
+#: The colours :func:`expire_sched._tone` and the screens ask for, by tone:
+#: ``(the bewitch theme role it is drawn in, the curses colour, the curses
+#: attribute)``. Keyed by the ANSI code that function returns, because that
+#: function is where the decision "what colour is this row worth" is made and
+#: this is only the translation of it — a tone missing from here is a row that
+#: loses its colour without anything saying so, which a test must pin against.
+#:
+#: The role is what the screen is drawn with wherever bewitch is
+#: (:data:`LOOK`): red is ``error``, green ``success``, yellow ``warning``, the
+#: old cyan heads ``primary``, and the dim grey is ``fg_more_subtle`` — a
+#: terminal's faint is a guess at grey and this is the grey. The curses half is
+#: the plain-curses fallback's, unchanged. The three keys under the line are
+#: the house style's own and have no ANSI spelling: body text, the quietest
+#: grey, and the spinner's colour.
 TONES = {
-    "1;31": (curses.COLOR_RED, curses.A_BOLD),
-    "31": (curses.COLOR_RED, 0),
-    "32": (curses.COLOR_GREEN, 0),
-    "33": (curses.COLOR_YELLOW, 0),
-    "90": (None, curses.A_DIM),
-    "1;33": (curses.COLOR_YELLOW, curses.A_BOLD),
-    "head": (curses.COLOR_CYAN, 0),
+    "1;31": ("error", curses.COLOR_RED, curses.A_BOLD),
+    "31": ("error", curses.COLOR_RED, 0),
+    "32": ("success", curses.COLOR_GREEN, 0),
+    "33": ("warning", curses.COLOR_YELLOW, 0),
+    "90": ("fg_more_subtle", None, curses.A_DIM),
+    "1;33": ("warning", curses.COLOR_YELLOW, curses.A_BOLD),
+    "head": ("primary", curses.COLOR_CYAN, 0),
+    # ---
+    "": ("fg_base", None, 0),
+    "faint": ("fg_most_subtle", None, curses.A_DIM),
+    "secondary": ("secondary", curses.COLOR_MAGENTA, 0),
 }
 
 
@@ -784,9 +815,10 @@ def ink(win) -> dict[str, int]:
     Every step is allowed to fail and leave the attribute at its bare bold or
     dim, which is exactly "draw it plain": this runs in Termux, over ssh, and
     in whatever a scheduled shell inherits, and a screen that needs colour to
-    be readable is a screen that is unreadable somewhere.
+    be readable is a screen that is unreadable somewhere. Only the plain-curses
+    fallback draws with these; bewitch draws by role (:func:`_pen`).
     """
-    got = {tone: attr for tone, (_, attr) in TONES.items()}
+    got = {tone: attr for tone, (_, _, attr) in TONES.items()}
     try:
         if not curses.has_colors():
             return got
@@ -795,7 +827,7 @@ def ink(win) -> dict[str, int]:
     except curses.error:
         return got
     index = 0
-    for tone, (colour, attr) in TONES.items():
+    for tone, (_, colour, attr) in TONES.items():
         if colour is None:
             continue
         index += 1
@@ -805,6 +837,386 @@ def ink(win) -> dict[str, int]:
             continue
         got[tone] = curses.color_pair(index) | attr
     return got
+
+
+# --------------------------------------------------------------------------- #
+# The look
+# --------------------------------------------------------------------------- #
+
+#: Whether this screen is drawn in the house style (bewitch's
+#: ``docs/house-style.md``: Crush's look) or plainly. True wherever ytq found a
+#: bewitch checkout and drew its own curses from it — the same answer
+#: :data:`curses` is, so ``pick_place`` inside ytq's session and ``dlq`` on its
+#: own cannot come to two looks. Where there is no checkout the standard
+#: library's curses runs and every part below draws as it did before bewitch:
+#: the same rows, the same keys, reverse video and dim.
+#:
+#: **Every part decides that once, and draws through** :func:`_put`. A part is
+#: built as a bewitch :class:`~bewitch.lipgloss.Block` where :data:`LOOK` is
+#: true and as text and a curses attribute where it is not; :func:`_put` is the
+#: one place a part meets the window, and the one place that knows a window
+#: may not have ``draw``. Nothing else in this file branches on it except the
+#: two dialogs, whose fallback is the full-screen page they used to be.
+LOOK = False
+if ytq.BEWITCH is not None:
+    try:
+        from dataclasses import replace as _recolour
+
+        from bewitch import bubbles, glyphs
+        from bewitch.bubbles import spinner as _spinner
+        from bewitch.lipgloss import Block, Pen, Span, string_width, truncate
+        from bewitch.theme import CHARM as THEME
+
+        LOOK = True
+    except ImportError:  # an older bewitch checkout: the plain look still works
+        LOOK = False
+
+#: The app's name, on the left of every header. ``pick_place`` draws it too,
+#: inside ytq's session: the listing it shows is this queue's, and the name
+#: says whose screen a person is looking at.
+NAME = "dlq"
+
+#: ``glyphs.ERROR``, spelled here so the plain fallback — which has no bewitch
+#: to import it from — draws the same mark. It was ``✗`` before the restyle;
+#: that glyph is not one bewitch has had drawn on the phone, and ``×`` is.
+CROSS = "×"
+
+#: How a listing row is drawn in the house style, by :func:`expire_sched._tone`:
+#: ``(mark, the mark's tone, the first line's tone, the other lines' tone)``.
+#: The mark is a :mod:`bewitch.glyphs` name and sits in a column the row's
+#: own indent already leaves, so marking a row never shifts its text. Colour is
+#: never the only thing saying it: the state cell says it in words, and the
+#: mark says it in a glyph. A finished row's text steps back a shade, which is
+#: the house style's "already dealt with".
+ROW_LOOK = {
+    "1;31": ("error", "1;31", "1;31", "90"),  # rejected: it will never run
+    "31": ("error", "31", "", "90"),  # failed
+    "32": ("check", "32", "90", "faint"),  # done
+    "33": ("pending", "33", "", "90"),  # started, not finished
+    "90": ("", "", "", "90"),  # waiting its turn
+}
+
+#: The item screen's state word, as a tag of this kind (``bubbles.tag``).
+TAG_KINDS = {"downloading": "primary", "queued": "info", "failed": "error",
+             "done": "success"}
+
+#: The upper-case words a verdict can open with, and the tag each is drawn as.
+#: They are the two that mean money: a night spending data nothing counts, and
+#: a night that will not run at all.
+VERDICT_TAGS = {"PAID": "warn", "BLOCKED": "error"}
+
+#: The widest a dialog is drawn, at any terminal width. Crush's dialogs are
+#: about this; on a phone it is the screen less a column each side.
+DIALOG_MAX = 60
+
+
+def dialog_width(width: int) -> int:
+    """How wide a dialog is on a terminal *width* columns wide."""
+    return max(20, min(width - 2, DIALOG_MAX))
+
+
+class Line(str):
+    """A line of a screen that knows the tone it is said in.
+
+    Still a ``str`` — everything that measures, wraps, compares or tests a
+    line goes on doing exactly that — with :attr:`tone` beside it, a
+    :data:`TONES` key, for the one function that draws it. Pure layout
+    functions say what a line *is* (a refusal, a path, a figure) and the
+    screen decides what that looks like, in one table.
+    """
+
+    tone = ""
+
+    def __new__(cls, text: str, tone: str = "") -> Line:
+        self = super().__new__(cls, text)
+        self.tone = tone
+        return self
+
+
+def _section_text(title: str, room: int, info: str = "") -> str:
+    """``title ──────── info``, exactly as ``bubbles.section`` spells it.
+
+    The plain text of a section rule, so a layout that is measured as text
+    (:func:`compose_rows`, and every test of it) measures what is drawn: the
+    rule fills what the title and *info* leave, *info* goes before the title
+    is cut, and a title too long for the room ends in ``…``. A test holds it
+    to ``bubbles.section``'s own plain text at every width.
+    """
+    rule = room - len(title) - 1 - (len(info) + 1 if info else 0)
+    if info and rule < 1:
+        info, rule = "", room - len(title) - 1
+    if rule < 1:
+        return title if len(title) <= room else title[: max(0, room - 1)] + "…"
+    return f"{title} {'─' * rule}" + (f" {info}" if info else "")
+
+
+class Rule(Line):
+    """A heading across the listing: a group's name, or the cut line.
+
+    Its text is :func:`_section_text`'s, so it is laid out and measured like
+    any other line; :attr:`title`, :attr:`info` and :attr:`kind` are what
+    ``bubbles.section`` is handed to draw it. *kind* is ``"group"`` for
+    ``queued ──── 3``, ``"cut"`` for the line tonight's spending stops at, and
+    ``"none"`` for the line saying nothing goes tonight — three things a reader
+    has to tell apart at a glance, so the screen draws each in its own colour.
+    """
+
+    title = ""
+    info = ""
+    kind = "group"
+
+    def __new__(cls, title: str, room: int, info: str = "", kind: str = "group") -> Rule:
+        self = super().__new__(cls, _section_text(title, room, info))
+        self.title, self.info, self.kind = title, info, kind
+        return self
+
+
+def _pen(tone: str = "", bold: bool = False):
+    """The bewitch pen a :data:`TONES` key is drawn with."""
+    role, _, attr = TONES[tone]
+    return Pen(
+        fg=getattr(THEME, role),
+        bold=True if bold or attr & curses.A_BOLD else None,
+    )
+
+
+def _attr(paint: dict, tone: str = "", bold: bool = False) -> int:
+    """The curses attribute the same key is drawn with on plain curses."""
+    return paint.get(tone, 0) | (curses.A_BOLD if bold else 0)
+
+
+def _put(win, y: int, x: int, part, attr: int = 0) -> None:
+    """The one place a drawn part meets the window.
+
+    A ``str`` is written as text with *attr*, which is the plain fallback's
+    whole look. A bewitch ``Block`` is composed with ``win.draw`` — the
+    house style — and, on a window with no ``draw``, written as its plain text
+    instead, so a part can never be the thing that stops a screen drawing.
+    """
+    if isinstance(part, str):
+        _addstr(win, y, x, part, attr)
+        return
+    draw = getattr(win, "draw", None)
+    if draw is not None:
+        draw(y, x, part)
+        return
+    for offset, text in enumerate(part.plain().split("\n")):
+        _addstr(win, y + offset, x, text.rstrip(), attr)
+
+
+def _say(win, paint: dict, y: int, x: int, text: str, tone: str = "",
+         bold: bool = False) -> None:
+    """One run of text, in a tone."""
+    _says(win, paint, y, x, [(text, tone, bold)])
+
+
+def _says(win, paint: dict, y: int, x: int, runs) -> None:
+    """Several runs on one line, ``(text, tone, bold)`` each, left to right.
+
+    Cut where :func:`ytq._addstr` cuts, a column short of the edge, so a word
+    longer than the line — a path, on a phone — overhangs exactly as far in
+    the house style as it always did, and no further.
+    """
+    room = win.getmaxyx()[1] - x - 1
+    if not LOOK:
+        for text, tone, bold in runs:
+            _addstr(win, y, x, text, _attr(paint, tone, bold))
+            x += len(text)
+        return
+    spans = []
+    for text, tone, bold in runs:
+        kept = truncate(text, max(0, room))
+        room -= string_width(kept)
+        spans.append(Span(kept, _pen(tone, bold)))
+    _put(win, y, x, Block([spans]))
+
+
+def _title(win, paint: dict, details: list[str], tone: str = "head") -> None:
+    """The screen's identity, on its first row.
+
+    ``bubbles.header``: the app's name, the ``╱`` band, and what this screen
+    is *about* — the queue, the item, the page — so the screens are still told
+    apart by their first row, which is how a person and the pty tests both
+    know which one is up. On plain curses it is the reverse-video bar it was,
+    with the details joined by a dash, and *tone* colours it.
+    """
+    width = win.getmaxyx()[1]
+    if LOOK:
+        _put(win, 0, 0, bubbles.header(NAME, details, width))
+        return
+    text = f" {' — '.join(details)} "
+    _addstr(
+        win,
+        0,
+        0,
+        _fit(text, width - 1).ljust(width - 1),
+        curses.A_REVERSE | curses.A_BOLD | paint.get(tone, 0),
+    )
+
+
+def _heading(win, paint: dict, y: int, text: str, room: int) -> None:
+    """A heading in the listing: a section rule, or a line of plain words."""
+    if not LOOK:
+        _addstr(win, y, 0, text, curses.A_BOLD)
+        return
+    if not isinstance(text, Rule):
+        _say(win, paint, y, 1, text, "90")
+        return
+    theme = THEME
+    if text.kind != "group":
+        # The cut line in the brand colour, "nothing tonight" in the warning
+        # one: both are the line a person opened the listing to read, and
+        # neither may look like the group headings either side of them.
+        role = THEME.primary if text.kind == "cut" else THEME.warning
+        theme = _recolour(THEME, fg_most_subtle=role)
+    _put(win, y, 0, bubbles.section(text.title, room, text.info or None, theme))
+
+
+def _list_row(win, paint: dict, y: int, text: str, room: int, tone: str,
+              selected: bool, first: bool, held: bool) -> None:
+    """One line of a download's row in the listing.
+
+    Selected, the row is a filled bar in ``primary`` with its text in
+    ``on_primary``, as wide as the listing and on every line of the row — the
+    house style's selection, never reverse video. *held* makes the bar's text
+    bold, which is how an item in the air reads differently from one under the
+    cursor. The first line carries the state's mark (:data:`ROW_LOOK`).
+    """
+    if not LOOK:
+        attr = (
+            curses.A_REVERSE | (curses.A_BOLD if held else 0)
+            if selected
+            else paint.get(tone, 0)
+        )
+        _addstr(win, y, 0, text.ljust(room) if selected else text, attr)
+        return
+    mark_name, mark_tone, text_tone, sub_tone = ROW_LOOK.get(tone, ROW_LOOK["90"])
+    marked = first and mark_name and text.startswith("  ")
+    if selected:
+        body = Pen(fg=THEME.on_primary, bg=THEME.primary, bold=True if held else None)
+        text = text.ljust(room)
+        mark_pen = Pen(fg=getattr(THEME, TONES[mark_tone][0]), bg=THEME.primary)
+    else:
+        body = _pen(text_tone if first else sub_tone)
+        mark_pen = _pen(mark_tone) if mark_tone else body
+    if marked:
+        # In the first of the two columns the row's indent leaves, with the
+        # second as the gap before the name — so the name does not move.
+        spans = [Span(glyphs.pick(mark_name), mark_pen), Span(text[1:], body)]
+    else:
+        spans = [Span(text, body)]
+    _put(win, y, 0, Block([spans]))
+
+
+def _scrollbar(win, y: int, x: int, height: int, total: int, top: int) -> None:
+    """Crush's one-column scrollbar, where a list is longer than its room.
+
+    Only in the house style, and only in a column the layout already leaves
+    empty: the listing and the logs are laid out one column narrower than the
+    terminal, so the bar costs nothing a row needed.
+    """
+    if LOOK and total > height > 0:
+        _put(win, y, x, bubbles.scrollbar(height, total, height, top))
+
+
+def _plain_help(pairs) -> str:
+    """The hint pairs as the plain fallback writes them: two spaces between."""
+    return "  ".join(f"{key} {what}" if what else key for key, what in pairs)
+
+
+def help_text(pairs, room: int) -> str:
+    """The text a hint line shows in *room* columns: what :func:`_help` draws.
+
+    ``bubbles.short_help``: a key and its word, ``•`` between pairs, and the dot
+    dropped to two spaces before a pair is dropped — which the hint sets are
+    measured never to need, because the pair that would go is the way out.
+    """
+    if LOOK:
+        return bubbles.short_help(pairs, room).plain().rstrip()
+    return _plain_help(pairs)
+
+
+def _help(win, paint: dict, y: int, pairs, width: int) -> None:
+    """A row of key hints, at x=1 in the room the hints have always had."""
+    if LOOK:
+        _put(win, y, 1, bubbles.short_help(pairs, width - 2))
+    else:
+        _addstr(win, y, 1, _plain_help(pairs), curses.A_DIM)
+
+
+def bar_block(have: int, total: int, width: int):
+    """``bubbles.progress_bar`` for *have* of *total*, or ``None``.
+
+    The same two refusals as :func:`progress_bar`, the plain fallback's bar: no
+    total is no fraction to draw, and under twelve columns there is no bar
+    worth reading. The fraction stops short of 100% until the bytes are all
+    there — the plain bar's rule, so a download one byte short never reads as
+    finished.
+    """
+    if not LOOK or total <= 0 or width < 12:
+        return None
+    fraction = min(1.0, max(0.0, have / total))
+    if have < total:
+        fraction = min(fraction, 0.99)
+    return bubbles.progress_bar(fraction, width)
+
+
+def _live(win, paint: dict, y: int, text: str, width: int) -> None:
+    """The line saying something is downloading: its arrow in the spinner's
+    colour, the rest in body text."""
+    text = _fit(text, width - 2)
+    if LOOK and text.startswith("↓"):
+        _says(win, paint, y, 1, [("↓", "secondary", True), (text[1:], "", True)])
+    else:
+        _say(win, paint, y, 1, text, "", True)
+
+
+def _verdict(win, paint: dict, y: int, text: str, tone: str = "") -> None:
+    """The listing's first header line, with a money word drawn as a tag.
+
+    ``tonight: BLOCKED: no portal`` and ``tonight: PAID: …`` open with the two
+    words that mean money (:data:`VERDICT_TAGS`); in the house style each is a
+    ``bubbles.tag``, laid out in exactly the columns the plain words take, so
+    the line fits where :func:`tonight_lines` measured it.
+    """
+    found = re.match(r"(tonight:) ([A-Z]{3,}): (.*)$", text) if LOOK else None
+    if not found:
+        _say(win, paint, y, 1, text, tone, True)
+        return
+    lead, word, rest = found.groups()
+    tag = bubbles.tag(word, VERDICT_TAGS.get(word, "warn"))
+    _say(win, paint, y, 1, lead, tone, True)
+    _put(win, y, 1 + len(lead), tag)
+    _say(win, paint, y, 1 + len(lead) + tag.width, f" {rest}", tone, True)
+
+
+def _dialog_theme(tone: str):
+    """The theme a dialog is drawn in: its border and title in *tone*'s role.
+
+    A confirm that removes something, or spends data nothing is counting, is
+    drawn in ``error`` rather than ``primary`` — never the only thing saying
+    so, since its title says it in words, but the first thing seen.
+    """
+    role = TONES.get(tone, TONES["head"])[0]
+    return THEME if role == "primary" else _recolour(THEME, primary=getattr(THEME, role))
+
+
+def _overlay(win, box, top: int | None = None) -> tuple[int, int]:
+    """Compose *box* over whatever is on the screen, centred across it.
+
+    Never by clearing first: what was behind a dialog stays visible behind it,
+    which is the house style's rule and the reason a confirm reads as a
+    question about the screen it came from. Centred down the screen too,
+    unless *top* says where — and never over the header or off the bottom.
+    Returns where its top-left corner went, for a field drawn inside it.
+    """
+    height, width = win.getmaxyx()
+    if top is None:
+        top = (height - box.height) // 2
+    top = max(1, min(top, height - box.height))
+    left = max(0, (width - box.width) // 2)
+    _put(win, top, left, box)
+    return top, left
 
 
 # --------------------------------------------------------------------------- #
@@ -860,13 +1272,14 @@ def open_offer(row: dict, running) -> str:
 
 
 def progress_bar(have: int, total: int, width: int) -> str:
-    """``[====····] 44%`` — the queue's one visual for how far in a download is.
+    """``[====····] 44%`` — how far in a download is, on plain curses.
 
-    Spelled the way ``quota_widget`` spells its own bar, ``=`` against ``·``,
-    rather than block characters: this is drawn on a phone, and the block
-    glyphs are East-Asian *ambiguous* width, so a terminal that renders them
-    double leaves the bar a column wider than it was measured at. The same
-    argument that keeps ``⚠`` off ytq's notices.
+    The plain fallback's bar; in the house style the foot is :func:`bar_block`,
+    ``bubbles.progress_bar``. Spelled the way ``quota_widget`` spells its own,
+    ``=`` against ``·``, because a terminal with no bewitch behind it is one
+    nobody has checked the block glyphs on. On the phone they were checked
+    (2026-10-10): ``█`` and ``░`` draw one column wide, which is what lets the
+    house style use them.
 
     With no total there is no fraction to draw and the caller gets ``""`` —
     a full-looking bar over an unknown size is the one reading worse than
@@ -924,7 +1337,10 @@ def item_lines(
     """
     compact = width < WIDE
     room = max(12, width - 4)
-    lines: list[str] = []
+    # Each line with the tone it is said in (:class:`Line`): the state and the
+    # figures in body text, what went wrong in the colour of what went wrong,
+    # and the description and the paths a step back, as secondary lines.
+    lines: list[tuple[str, str]] = []
     shown = _with_live(row, reading)
     # `where` is the DIRECTORY the item file sits in, and an item being
     # downloaded is still in queue/ — it only moves when it finishes. So the
@@ -934,44 +1350,52 @@ def item_lines(
     head = f"{head_word} · {_state_of(shown, compact)}".rstrip(" ·")
     figures = _progress_of(shown, compact)
     if figures and len(head) + 2 + len(figures) <= room:
-        lines.append(f"{head}  {figures}")
+        lines.append((f"{head}  {figures}", ""))
     else:
-        lines.append(head)
+        lines.append((head, ""))
         if figures:
-            lines.append(figures)
+            lines.append((figures, ""))
     # Not on a finished one, where the attempts are how many nights it took
     # and "try 1/3" reads as nights it still has left.
     if place and row["where"] == "queued":
         # Where it is in the run order, said as a position rather than as the
         # number it is stored under: the number is an implementation detail of
         # sorting file names, and nothing asks anyone to type it any more.
-        lines.append(f"{_ordinal(place[0])} of {place[1]} in the queue")
+        lines.append((f"{_ordinal(place[0])} of {place[1]} in the queue", ""))
     if row["attempts"] and row["where"] != "done":
         tries = f"try {row['attempts']}/{sched._runner().MAX_ATTEMPTS}"
-        lines += _wrap(f"{tries} · last {row['last']}" if row["last"] else tries, room)
+        said = f"{tries} · last {row['last']}" if row["last"] else tries
+        lines += [(text, "33") for text in _wrap(said, room)]
     if row["error"]:
-        lines += _wrap(f"rejected: {row['error']}", room)
+        lines += [(text, "1;31") for text in _wrap(f"rejected: {row['error']}", room)]
     if row["desc"] and row["desc"] != row["name"]:
-        lines += _wrap(row["desc"], room)
+        lines += [(text, "90") for text in _wrap(row["desc"], room)]
     if row["files"]:
-        lines += _wrap(f"here: {sched._short(row['files'][0])}", room, "  ")
+        here = f"here: {sched._short(row['files'][0])}"
+        lines += [(text, "90") for text in _wrap(here, room, "  ")]
     elif row.get("lost"):
         # Not "→ where it will land": nothing is going to land. Where it *was*
         # put is the only thing anyone can act on, and it is the one fact that
         # dies with this record.
         where = row["recorded"][0] if row["recorded"] else sched.OUT / row["name"]
-        lines += _wrap(f"was: {sched._short(Path(where))}", room, "  ")
-        lines += _wrap(
-            (
-                "deleted since"
-                if row["lost"] == "gone"
-                else "that folder cannot be reached from here"
-            ),
-            room,
-        )
+        lines += [
+            (text, "90") for text in _wrap(f"was: {sched._short(Path(where))}", room, "  ")
+        ]
+        lines += [
+            (text, "31")
+            for text in _wrap(
+                (
+                    "deleted since"
+                    if row["lost"] == "gone"
+                    else "that folder cannot be reached from here"
+                ),
+                room,
+            )
+        ]
     else:
-        lines += _wrap(f"→ {sched._short(Path(ytq.landing(row['dest'])))}", room, "  ")
-    return [_fit(line, room) for line in lines]
+        landing = f"→ {sched._short(Path(ytq.landing(row['dest'])))}"
+        lines += [(text, "90") for text in _wrap(landing, room, "  ")]
+    return [Line(_fit(text, room), tone) for text, tone in lines]
 
 
 # --------------------------------------------------------------------------- #
@@ -1045,7 +1469,7 @@ def _pick(options: list[str], room: int) -> str:
 
 
 def tonight_lines(facts: dict | None, width: int, live: str = "") -> list[str]:
-    """The two lines under the title bar: the verdict, then the figures.
+    """The two lines under the header: the verdict, then the figures.
 
     The same two facts ``dlq status`` opens with, kept in view while the queue
     is worked instead of a screen away — and taken from the same snapshot, so
@@ -1064,7 +1488,7 @@ def tonight_lines(facts: dict | None, width: int, live: str = "") -> list[str]:
     """
     room = max(8, width - 2)
     if not facts:
-        return [_fit(ASKING, room), ""]
+        return [Line(_fit(ASKING, room)), Line("")]
     if live:
         head = _fit(f"downloading now: {_slug_of(live)}", room)
     else:
@@ -1085,7 +1509,14 @@ def tonight_lines(facts: dict | None, width: int, live: str = "") -> list[str]:
             [f"tonight: {phrase}{tail}" for tail in [*dict.fromkeys(tails), ""]],
             room,
         )
-    return [head, _fit(_tonight_figures(facts, room), room)]
+    # The figures are a secondary line, a step back from the verdict — except
+    # when what stands there is the portal's own reason it did not answer,
+    # which is the one line on the screen saying what to do about it.
+    problem = facts["portal"] is None and not facts["blind"] and facts["verdict"] != "off"
+    return [
+        Line(head),
+        Line(_fit(_tonight_figures(facts, room), room), "33" if problem else "90"),
+    ]
 
 
 def _tonight_figures(facts: dict, room: int) -> str:
@@ -1163,17 +1594,17 @@ def tonight_plan(order: list[str], facts: dict | None) -> list[dict]:
     )
 
 
-def _rule(spellings: list[str], width: int) -> str:
-    """``── text ─────`` across the listing, in the fullest spelling that fits.
+def _rule(spellings: list[str], width: int, kind: str = "cut") -> Rule:
+    """``text ─────`` across the listing, in the fullest spelling that fits.
 
     Ordered longest first, and the last one is the one that has to fit any
     phone — a rule with nothing readable on it is worse than no rule, since it
-    is drawn *between* two downloads and would read as a separator.
+    is drawn *between* two downloads and would read as a separator. It is a
+    :class:`Rule`, which ``bubbles.section`` draws: the words first, running
+    into the line, in the colour *kind* says.
     """
     room = max(8, width - 1)
-    text = _pick(spellings, room - 6)
-    drawn = f"── {text} "
-    return _fit(drawn + "─" * max(2, room - len(drawn)), room)
+    return Rule(_pick(spellings, room - 6), room, kind=kind)
 
 
 def _nothing_to_spend(facts: dict) -> str:
@@ -1244,7 +1675,7 @@ def cut_index(
     if last >= 0:
         total = ytq.human(sum(got.values()))
         return last + 1, _rule(
-            [f"tonight ends here: {total}", f"tonight: {total}"], width
+            [f"tonight ends here: {total}", f"tonight: {total}"], width, "cut"
         )
     verdict = facts["verdict"]
     if verdict not in (*sched._runner().GATE_GO, "early"):
@@ -1273,7 +1704,7 @@ def cut_index(
     # columns there are twenty-five for both, and "nothing tonight" is already
     # the shape of the line — a rule across the top of the queued group with no
     # item on it — while the reason is the half nothing else on the screen
-    # says. A line reading `── nothing tonight ──` and no more is the screen
+    # says. A line reading `nothing tonight ────` and no more is the screen
     # knowing the answer and declining to give it.
     spellings = [
         f"nothing tonight: {why}",
@@ -1288,7 +1719,7 @@ def cut_index(
     # spelling is dropped rather than reworded: `VERDICTS` stays the one set of
     # words for a night, and there is always another rung under this one.
     return 0, _rule(
-        [text for text in spellings if text.count("tonight") <= 1], width
+        [text for text in spellings if text.count("tonight") <= 1], width, "none"
     )
 
 
@@ -1346,7 +1777,7 @@ def compose_rows(
 
     *cut* is :func:`cut_index`'s answer: ``(how many queued rows tonight
     reaches, the line to draw)``. It is emitted **as a heading** — index
-    ``None``, exactly like ``queued (3)`` — which is the whole of how the cut
+    ``None``, exactly like ``queued ──── 3`` — which is the whole of how the cut
     line stays computed rather than becoming an item: the cursor skips it,
     :func:`landed_index` cannot land on it, and no row's index moves because it
     is there. A test must pin both halves.
@@ -1407,7 +1838,9 @@ def compose_rows(
         group = [index for index, row in enumerate(rows) if row["where"] == where]
         if not group:
             continue
-        out.append((None, [f"{where} ({len(group)})"]))
+        # A section rule — ``queued ──── 3`` — and still a heading: index
+        # ``None``, a line the cursor steps over like the cut line below it.
+        out.append((None, [Rule(where, room, str(len(group)))]))
         for at, index in enumerate(group):
             if cut and where == "queued" and at == cut[0]:
                 out.append((None, [cut[1]]))
@@ -1442,37 +1875,34 @@ def compose_rows(
     return out
 
 
-def _bar(win, paint: dict, text: str, tone: str = "head") -> None:
-    """The screen's identity, across the top, in reverse."""
-    width = win.getmaxyx()[1]
-    _addstr(
-        win,
-        0,
-        0,
-        _fit(text, width - 1).ljust(width - 1),
-        curses.A_REVERSE | curses.A_BOLD | paint.get(tone, 0),
-    )
-
-
-def _foot(win, paint: dict, flash: str, keys: str, live: str = "") -> None:
+def _foot(
+    win, paint: dict, flash: str, keys, live: str = "", bar=None
+) -> None:
     """The two lines every screen ends with: what just happened, and the keys.
 
     The keys are last and are never allowed to be the line that is lost, which
     is why the flash above them is clipped rather than wrapped: a message about
     something that has already happened is worth less than the way out.
+
+    *keys* is the hint pairs (:func:`hint_pairs`). *live* is the line saying
+    something is downloading; *bar* is a ``bubbles.progress_bar`` to draw in
+    its place, when the download on the screen is the screen's own item.
     """
     height, width = win.getmaxyx()
-    if live:
-        _addstr(win, height - 3, 1, _fit(live, width - 2), curses.A_BOLD)
+    if bar is not None:
+        _put(win, height - 3, 1, bar)
+    elif live:
+        _live(win, paint, height - 3, live, width)
     if flash:
-        _addstr(
+        _say(
             win,
-            height - 4 if live else height - 3,
+            paint,
+            height - 4 if live or bar is not None else height - 3,
             1,
             _fit(flash, width - 2),
-            paint.get("1;33", 0),
+            "1;33",
         )
-    _addstr(win, height - 2, 1, keys, curses.A_DIM)
+    _help(win, paint, height - 2, keys, width)
 
 
 def preview(rows: list[dict], name: str, pos: int) -> list[dict]:
@@ -1555,7 +1985,7 @@ def draw_list(
 ) -> int:
     """Draw the listing and return the line it was scrolled to.
 
-    Four lines are laid down before the downloads: the title bar, the two
+    Four lines are laid down before the downloads: the header, the two
     header lines saying what tonight would do (:func:`tonight_lines`), and a
     blank. Inside the queued group the cut line says where tonight's spending
     stops, and it is worked out **here, every draw, from the order on the
@@ -1585,15 +2015,15 @@ def draw_list(
         cursor = next(
             (index for index, row in enumerate(shown) if row["name"] == moving), cursor
         )
-        _bar(win, paint, f" moving {_slug_of(moving)} ", "1;33")
+        _title(win, paint, [f"moving {_slug_of(moving)}"], "1;33")
     else:
-        _bar(
+        _title(
             win,
             paint,
             (
-                f" queue — {len(rows)} in {sched._short(sched.ROOT)} "
+                ["queue", f"{len(rows)} in {sched._short(sched.ROOT)}"]
                 if width >= WIDE
-                else " queue "
+                else ["queue"]
             ),
         )
     facts = queue.tonight.facts
@@ -1608,9 +2038,11 @@ def draw_list(
         # A reading that failed keeps the figures the last one gave and says so
         # where the verdict goes: stale figures with a word about them are
         # worth more than a screen that has gone blank.
-        header[0] = _fit(queue.tonight.note, width - 2)
-    for offset, text in enumerate(header):
-        _addstr(win, 1 + offset, 1, text, curses.A_BOLD if not offset else 0)
+        header[0] = Line(_fit(queue.tonight.note, width - 2), "33")
+    # The tones are the house style's; on plain curses the two lines are drawn
+    # as they always were, bold and then plain.
+    _verdict(win, paint, 1, header[0], header[0].tone if LOOK else "")
+    _say(win, paint, 2, 1, header[1], header[1].tone if LOOK else "")
     order = [row["name"] for row in shown if row["where"] == "queued"]
     # One projection per draw, and both the line and the rows are drawn from
     # it: the line says where tonight stops, the rows say how much of the item
@@ -1625,14 +2057,18 @@ def draw_list(
         None if reaches is None else (reaches, ruled),
         planned,
     )
-    flat = [(index, text) for index, lines in entries for text in lines]
+    # Each line with whether it is the first of its row, which is the one that
+    # carries the row's mark.
+    flat = [
+        (index, text, not at) for index, lines in entries for at, text in enumerate(lines)
+    ]
     listed = max(1, height - 7)
     if not flat:
         # An empty queue is a listing with nothing in it, not a different
         # screen: the header still says what tonight would do, and every key
         # still works.
-        flat = [(None, text) for text in _wrap(EMPTY_QUEUE, width - 2)]
-    mine = [line for line, (index, _) in enumerate(flat) if index == cursor]
+        flat = [(None, text, True) for text in _wrap(EMPTY_QUEUE, width - 2)]
+    mine = [line for line, (index, _, _) in enumerate(flat) if index == cursor]
     if mine:
         top = min(top, mine[0])
         top = max(top, mine[-1] - listed + 1)
@@ -1641,24 +2077,32 @@ def draw_list(
         line = top + offset
         if line >= len(flat):
             break
-        index, text = flat[line]
+        index, text, first = flat[line]
         if index is None:
-            attr = curses.A_BOLD
-        elif index == cursor:
-            attr = curses.A_REVERSE | (curses.A_BOLD if moving else 0)
+            _heading(win, paint, 4 + offset, text, width - 1)
         else:
-            attr = paint.get(_tone(shown[index]), 0)
-        _addstr(
-            win, 4 + offset, 0, text.ljust(width - 1) if index == cursor else text, attr
-        )
+            _list_row(
+                win,
+                paint,
+                4 + offset,
+                text,
+                width - 1,
+                _tone(shown[index]),
+                index == cursor,
+                first,
+                bool(moving),
+            )
+    # In the column the rows leave empty — they are laid out one narrower than
+    # the terminal — so it costs the listing nothing it had.
+    _scrollbar(win, 4, width - 1, listed, len(flat), top)
     live = "" if moving else queue.live_line(width)
     if not moving and not live and not flash:
-        _addstr(win, height - 3, 1, _fit(LEGEND_KEYS, width - 2), curses.A_DIM)
+        _help(win, paint, height - 3, LEGEND_KEYS, width)
     _foot(
         win,
         paint,
         flash,
-        hint(
+        hint_pairs(
             ("pick" if phantom else "moving")
             if moving
             else ("list-live" if queue.mine() else "list"),
@@ -1716,7 +2160,7 @@ def holding(
 
     **One loop for both things that are held.** ``m`` on the listing holds a
     download that is in the queue; :func:`pick_place` holds a video that is not
-    in it yet. They are the same screen — the same title bar, the same two
+    in it yet. They are the same screen — the same header, the same two
     arrows, the same cut line moving under the item as it goes — and they are
     this function rather than two copies of it, because the reason to show
     either of them is the line, and a line drawn twice is a line that can be
@@ -1990,10 +2434,84 @@ def place(name: str, pos: int) -> tuple[str, bool]:
 # --------------------------------------------------------------------------- #
 
 
+def draw_item(
+    win,
+    paint: dict,
+    queue,
+    row: dict,
+    keys: dict,
+    opening: str,
+    flash: str,
+    downloading: bool,
+    reading: tuple[int, int] | None,
+) -> None:
+    """Lay the item screen down, without showing it: the loop refreshes.
+
+    The header names the item; the state word under it is a ``bubbles.tag``
+    (:data:`TAG_KINDS`), then the facts in the tones :func:`item_lines` gave
+    them, then one action a line — its key in the key colour, what it does in
+    words. The foot is a ``bubbles.progress_bar`` while this item is the one
+    downloading, and the live line naming another item while that one is.
+    """
+    win.erase()
+    height, width = win.getmaxyx()
+    _title(win, paint, [_slug_of(row["name"])])
+    head_word = "downloading" if downloading else row["where"]
+    line = 2
+    for at, text in enumerate(
+        item_lines(row, width, queue.place(row["name"]), downloading, reading)
+    ):
+        if line >= height - 4:
+            break
+        if LOOK and not at and text.startswith(head_word):
+            # The tag starts a column to the left, so its word lines up with
+            # every line under it and the line still ends inside the room.
+            tag = bubbles.tag(head_word, TAG_KINDS.get(head_word, "info"))
+            _put(win, line, 1, tag)
+            _say(win, paint, line, 1 + tag.width, text[len(head_word) :])
+        else:
+            _say(win, paint, line, 2, text, getattr(text, "tone", "") if LOOK else "")
+        line += 1
+    line += 1
+    for key, label in [*keys.items(), *([("o", opening)] if opening else [])]:
+        if line >= height - 4:
+            break
+        _says(
+            win,
+            paint,
+            line,
+            2,
+            [(key, "head", True), ("  ", "", False), (_fit(label, width - 7), "", False)],
+        )
+        line += 1
+    # When the download on screen is THIS item, the foot is a bar rather than a
+    # second copy of the figures already in the head. When it is some other
+    # item, the live line still names it — that is not duplication, it is the
+    # only place that says so.
+    bar = None
+    if downloading:
+        shown = _with_live(row, reading)
+        bar = bar_block(shown["have"], shown["total"], width - 2)
+        live = "" if LOOK else progress_bar(shown["have"], shown["total"], width - 2)
+    else:
+        live = queue.live_line(width)
+    # What an ask made here came to — opened, or why not — once the run it was
+    # made of has ended. Said until something else is.
+    ours = queue.running.name == row["name"]
+    _foot(
+        win,
+        paint,
+        flash or (queue.running.opened if ours else ""),
+        hint_pairs("item-live" if queue.mine() else "item", width),
+        live,
+        bar,
+    )
+
+
 def item_screen(win, paint: dict, queue, row: dict, flash: str) -> str:
     """One item and its actions, until a key leaves it. Returns that key.
 
-    Every mutating key in the whole program is on this screen, under a bar
+    Every mutating key in the whole program is on this screen, under a header
     naming the item it will act on. That is the safety rule: there is no way to
     remove the wrong download, because the only download on the screen is the
     one being removed.
@@ -2001,48 +2519,13 @@ def item_screen(win, paint: dict, queue, row: dict, flash: str) -> str:
     keys = dict(actions_for(row))
     # nomut: start
     while True:
-        win.erase()
-        height, width = win.getmaxyx()
-        _bar(win, paint, f" {_slug_of(row['name'])} ")
         # Asked once per draw and handed to both the head and the foot, so the
         # two can never be a second apart from each other.
         downloading = queue.downloading(row["name"])
         reading = ytq.now_progress(row["name"]) if downloading else None
         opening = open_offer(row, queue.running)
-        line = 2
-        for text in item_lines(
-            row, width, queue.place(row["name"]), downloading, reading
-        ):
-            if line >= height - 4:
-                break
-            _addstr(win, line, 2, text)
-            line += 1
-        line += 1
-        for key, label in [*keys.items(), *([("o", opening)] if opening else [])]:
-            if line >= height - 4:
-                break
-            _addstr(win, line, 2, key, curses.A_BOLD | paint.get("head", 0))
-            _addstr(win, line, 5, _fit(label, width - 7))
-            line += 1
-        # When the download on screen is THIS item, the foot is a bar rather
-        # than a second copy of the figures already in the head. When it is
-        # some other item, the live line still names it — that is not
-        # duplication, it is the only place that says so.
-        if downloading:
-            shown = _with_live(row, reading)
-            live = progress_bar(shown["have"], shown["total"], width - 2)
-        else:
-            live = queue.live_line(width)
-        # What an ask made here came to — opened, or why not — once the run
-        # it was made of has ended. Said until something else is.
+        draw_item(win, paint, queue, row, keys, opening, flash, downloading, reading)
         ours = queue.running.name == row["name"]
-        _foot(
-            win,
-            paint,
-            flash or (queue.running.opened if ours else ""),
-            hint("item-live" if queue.mine() else "item", width),
-            live,
-        )
         win.refresh()
 
         # Kept waking after our download ends until its outcome is known, or
@@ -2072,20 +2555,107 @@ def item_screen(win, paint: dict, queue, row: dict, flash: str) -> str:
     # nomut: end
 
 
+#: The keys of a field, in every dialog that has one.
+ASK_KEYS = (("⏎", "ok"), ("esc", "cancel"))
+
+
 def ask(
     win, paint: dict, title: str, prompt: str, initial: str, note: str = ""
 ) -> str | None:
-    """One field, on a screen of its own. ``None`` if it was backed out of."""
-    win.erase()
+    """One field, in a dialog over the screen it was asked from. ``None`` if it
+    was backed out of.
+
+    A rounded ``bubbles.dialog``: the title, the prompt, the field, and the
+    note under it in grey — composed over the page rather than replacing it,
+    so the row being changed is still there behind the question. Placed near
+    the top rather than centred, because on a phone the keyboard this field
+    brings up takes the bottom half of the screen. On plain curses it is the
+    page of its own it always was.
+    """
     height, width = win.getmaxyx()
-    _bar(win, paint, f" {title} ")
-    _addstr(win, 2, 2, _fit(prompt, width - 4), curses.A_BOLD)
-    for offset, text in enumerate(_wrap(note, width - 4) if note else []):
-        if 6 + offset < height - 2:
-            _addstr(win, 6 + offset, 2, text, curses.A_DIM)
-    _addstr(win, height - 2, 1, "⏎ ok   esc cancel", curses.A_DIM)
+    if not LOOK:
+        win.erase()
+        _title(win, paint, [title.strip()])
+        _addstr(win, 2, 2, _fit(prompt, width - 4), curses.A_BOLD)
+        for offset, text in enumerate(_wrap(note, width - 4) if note else []):
+            if 6 + offset < height - 2:
+                _addstr(win, 6 + offset, 2, text, curses.A_DIM)
+        _addstr(win, height - 2, 1, _plain_help(ASK_KEYS), curses.A_DIM)
+        win.refresh()
+        return ytq.text_input(win, 4, 2, initial, max(8, width - 5))
+    box_w = dialog_width(width)
+    inner = box_w - 4
+    # The prompt is wrapped rather than clipped — the box is narrower than the
+    # page it replaced, and the end of a prompt is the half saying what the
+    # field is for — but kept to two lines, so the field stays near the top.
+    asked = _wrap(prompt, inner)
+    asked = asked[:1] + [_fit(" ".join(asked[1:]), inner)] if len(asked) > 2 else asked
+    # Border, title and its gap, the prompt, a gap and the field, then a gap
+    # and the keys: nine rows and the prompt before a word of the note, which
+    # is what is given up when the screen is short — the field and the way out
+    # never are.
+    room = max(0, height - 2 - 1 - 9 - len(asked))
+    notes = (_wrap(note, inner) if note else [])[:room]
+    body = [*[[Span(text, _pen("", True))] for text in asked], [], []]
+    if notes:
+        body += [[], *[[Span(text, _pen("90"))] for text in notes]]
+    box = bubbles.dialog(
+        _fit(title.strip(), inner), Block(body, inner), box_w, ASK_KEYS
+    )
+    top, left = _overlay(win, box, 2)
     win.refresh()
-    return ytq.text_input(win, 4, 2, initial, max(8, width - 5))
+    # The field sits under the prompt and its gap, which are under the border,
+    # the title and the title's gap.
+    return ytq.text_input(win, top + 3 + len(asked) + 1, left + 2, initial, inner)
+
+
+def confirm_body(
+    lines: list[str], answers: list[tuple[str, str]], inner: int, rows: int
+) -> list[list[tuple[str, str, bool]]]:
+    """A confirm's body, cut to *rows*: per line, its ``(text, tone, bold)`` runs.
+
+    Pure, so the one thing a confirm must never do can be checked without a
+    terminal: lose its answers. The lines come first — the question, which is
+    the first of them, in bold — a blank after each, then one line per answer
+    that has words: its keys in the key colour, what they do in body text.
+
+    Too tall for its box, it gives things up in one order: the blank lines,
+    then the last lines of the text, from the end, the last one kept ending in
+    ``…``. **Never the question's first line and never an answer**: a confirm
+    with its answers cut off is a screen on which every key means no, which is
+    the removal bug of old arrived at by layout.
+    """
+    paragraphs = [
+        [[(text, "", index == 0)] for text in _wrap(line, inner)]
+        for index, line in enumerate(lines)
+    ]
+    picks = []
+    for keys, label in answers:
+        if not label:
+            continue
+        spelled = " or ".join(keys)
+        whole = _fit(f"{spelled}  {label}", inner)
+        picks.append([(whole[: len(spelled)], "head", True), (whole[len(spelled) :], "", False)])
+
+    def laid(blanks: bool, text: list) -> list:
+        out: list = []
+        for para in text:
+            out += para + ([[]] if blanks else [])
+        return out + picks
+
+    body = laid(True, paragraphs)
+    if len(body) <= rows:
+        return body
+    body = laid(False, paragraphs)
+    if len(body) <= rows:
+        return body
+    text = [line for para in paragraphs for line in para]
+    keep = max(1, rows - len(picks))
+    if keep < len(text):
+        text = text[:keep]
+        last, tone, bold = text[-1][0]
+        text[-1] = [(_fit(f"{last} …", inner), tone, bold)]
+    return text + picks
 
 
 def confirm(
@@ -2110,31 +2680,51 @@ def confirm(
     Each entry carries **every key that means it**, so an answer can keep a key
     alive on an item where it has nothing extra to do — see
     :func:`removal_answers` for why that matters more than it sounds.
+
+    Drawn as a rounded ``bubbles.dialog`` over the screen it was asked from,
+    its border in *tone*'s colour (:func:`_dialog_theme`) and its body cut by
+    :func:`confirm_body`; on plain curses, the page of its own it always was.
     """
     answers = answers or [("y", "")]
-    win.erase()
     height, width = win.getmaxyx()
-    _bar(win, paint, title, tone)
-    at = 2
-    for index, text in enumerate(lines):
-        for wrapped in _wrap(text, width - 4):
-            if at >= height - 4:
-                break
-            _addstr(win, at, 2, wrapped, curses.A_BOLD if index == 0 else 0)
+    which = "confirm-two" if any(label for _, label in answers) else "confirm"
+    if LOOK:
+        box_w = dialog_width(width)
+        inner = box_w - 4
+        # Border, title and gap, gap and keys: six rows that are not the body,
+        # and the box keeps clear of the header and the screen's last row.
+        body = confirm_body(lines, answers, inner, max(1, height - 8))
+        drawn = Block(
+            [[Span(text, _pen(tone_of, bold)) for text, tone_of, bold in line]
+             for line in body],
+            inner,
+        )
+        # The title is the one line nothing wraps; where the whole of it does
+        # not fit, what is kept is what comes after its dash — "NOT COUNTED"
+        # is the half of "run the queue — NOT COUNTED" a phone has to show.
+        named = _pick([title.strip(), title.strip().split(" — ")[-1]], inner)
+        _overlay(
+            win,
+            bubbles.dialog(named, drawn, box_w, hint_pairs(which, width),
+                           _dialog_theme(tone)),
+        )
+    else:
+        win.erase()
+        _title(win, paint, [title.strip()], tone)
+        at = 2
+        for index, text in enumerate(lines):
+            for wrapped in _wrap(text, width - 4):
+                if at >= height - 4:
+                    break
+                _addstr(win, at, 2, wrapped, curses.A_BOLD if index == 0 else 0)
+                at += 1
             at += 1
-        at += 1
-    for keys, label in answers:
-        if not label or at >= height - 3:
-            continue
-        _addstr(win, at, 2, _fit(f"{' or '.join(keys)}  {label}", width - 4))
-        at += 1
-    _addstr(
-        win,
-        height - 2,
-        1,
-        hint("confirm-two" if any(label for _, label in answers) else "confirm", width),
-        curses.A_DIM,
-    )
+        for keys, label in answers:
+            if not label or at >= height - 3:
+                continue
+            _addstr(win, at, 2, _fit(f"{' or '.join(keys)}  {label}", width - 4))
+            at += 1
+        _help(win, paint, height - 2, hint_pairs(which, width), width)
     win.refresh()
     key = win.getch()
     taken = "".join(keys for keys, _ in answers)
@@ -2199,7 +2789,7 @@ def file_screen(win, paint: dict, path: Path) -> None:
     while True:
         win.erase()
         height, width = win.getmaxyx()
-        _bar(win, paint, f" {path.name} ")
+        _title(win, paint, [path.name])
         # Wrapped at the width there is, with continuations indented: a log
         # line cut off at the right is usually the half that said why.
         lines: list[str] = []
@@ -2210,8 +2800,10 @@ def file_screen(win, paint: dict, path: Path) -> None:
         for offset in range(listed):
             if top + offset >= len(lines):
                 break
-            _addstr(win, 2 + offset, 1, lines[top + offset])
-        _addstr(win, height - 2, 1, hint("log", width), curses.A_DIM)
+            _say(win, paint, 2 + offset, 1, lines[top + offset])
+        # The lines end two columns short of the edge, so the bar has its own.
+        _scrollbar(win, 2, width - 1, listed, len(lines), top)
+        _help(win, paint, height - 2, hint_pairs("log", width), width)
         win.refresh()
         key = win.getch()
         if key in (ord("q"), 27, curses.KEY_LEFT):
@@ -2236,7 +2828,41 @@ def file_screen(win, paint: dict, path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def waiting(win, paint: dict, title: str, note: str, work):
+#: The way out of every wait.
+WAIT_KEYS = (("q", "stop waiting"),)
+
+
+def draw_wait(win, paint: dict, title: str, note: str, seconds: int, tick: int) -> None:
+    """Lay a wait down, without showing it.
+
+    The house style's wait: a rounded dialog over whatever screen asked —
+    which stays visible behind it — with ``spinner.Dot`` turning in the
+    spinner's colour beside what is being waited for, the seconds under it in
+    grey, and the way out on its last row. On plain curses, the page of its
+    own it always was.
+    """
+    height, width = win.getmaxyx()
+    if not LOOK:
+        win.erase()
+        _title(win, paint, [title.strip()])
+        _addstr(win, 2, 2, _fit(note, width - 4), curses.A_BOLD)
+        _addstr(win, 4, 2, f"{seconds}s", curses.A_DIM)
+        _addstr(win, height - 2, 1, _plain_help(WAIT_KEYS), curses.A_DIM)
+        return
+    box_w = dialog_width(width)
+    inner = box_w - 4
+    frame = _spinner.Dot.frame(tick)
+    body = Block(
+        [
+            [Span(frame, _pen("secondary")), Span(_fit(note, inner - len(frame)), _pen(""))],
+            [Span(f"{seconds}s", _pen("90"))],
+        ],
+        inner,
+    )
+    _overlay(win, bubbles.dialog(_fit(title.strip(), inner), body, box_w, WAIT_KEYS))
+
+
+def waiting(win, paint: dict, title: str, note: str, work, behind=None):
     """Do *work* off the screen while the screen says what it is waiting for.
 
     Returns ``("ok", answer)``, ``("left", "")`` if it was abandoned, or
@@ -2250,6 +2876,11 @@ def waiting(win, paint: dict, title: str, note: str, work):
     and counted, and ``q`` walks away from it. The answer of an abandoned
     reading is dropped rather than kept, because arriving late on top of a
     later screen is worse than not arriving.
+
+    *behind* lays down the screen the wait is drawn over, for a caller whose
+    screen is no longer what is on the window — a confirm has just been drawn
+    over it — so the wait box is not left standing inside the edges of a
+    taller dialog that has already been answered.
     """
     answer: list = []
     trouble: list[str] = []
@@ -2270,12 +2901,10 @@ def waiting(win, paint: dict, title: str, note: str, work):
             if trouble:
                 return "failed", trouble[0]
             return ("ok", answer[0]) if answer else ("failed", "no answer")
-        win.erase()
-        height, width = win.getmaxyx()
-        _bar(win, paint, title)
-        _addstr(win, 2, 2, _fit(note, width - 4), curses.A_BOLD)
-        _addstr(win, 4, 2, f"{int(time.monotonic() - started)}s", curses.A_DIM)
-        _addstr(win, height - 2, 1, "q stop waiting", curses.A_DIM)
+        if behind is not None and LOOK:
+            behind()
+        elapsed = time.monotonic() - started
+        draw_wait(win, paint, title, note, int(elapsed), int(elapsed / 0.1))
         win.refresh()
         win.timeout(150)
         try:
@@ -2656,10 +3285,18 @@ def _act_now(win, paint, queue, row) -> tuple[str, bool, str]:
     if not (ytq.HERE / "expire_sched.py").is_file():
         return "the queue manager is not beside the queue", False, row["name"]
     # Drawn before the wait, not after it: two seconds of a screen that has
-    # not changed reads as a key that did not register.
-    win.erase()
-    _bar(win, paint, " download now ", "head")
-    _addstr(win, 2, 2, "asking whether zwana answers…")
+    # not changed reads as a key that did not register. In the house style it
+    # is a wait box over the item; the confirm that follows is taller and as
+    # wide, so it covers it whole.
+    if LOOK:
+        width = win.getmaxyx()[1]
+        _overlay(
+            win, bubbles.wait_box("asking whether zwana answers…", 0, dialog_width(width))
+        )
+    else:
+        win.erase()
+        _title(win, paint, ["download now"], "head")
+        _addstr(win, 2, 2, "asking whether zwana answers…")
     win.refresh()
     seen = reachable()
     answer = confirm(
@@ -2738,7 +3375,7 @@ def run_now(win, paint, queue) -> tuple[str, bool]:
     return said if seen else f"{said} — NOT COUNTED", True
 
 
-def arm_job(win, paint) -> tuple[str, bool]:
+def arm_job(win, paint, behind=None) -> tuple[str, bool]:
     """Register the nightly job — :func:`expire_sched.do_arm`, and nothing else.
 
     The same function ``dlq arm`` calls, which is the rule every verb living at
@@ -2746,7 +3383,7 @@ def arm_job(win, paint) -> tuple[str, bool]:
     arming worked leave nobody able to tell.
     """
     state, said = waiting(
-        win, paint, " arm ", "asking Android's scheduler…", sched.do_arm
+        win, paint, " arm ", "asking Android's scheduler…", sched.do_arm, behind
     )
     if state == "left":
         return "nothing changed", False
@@ -2777,7 +3414,7 @@ def cancel_note() -> list[str]:
     ]
 
 
-def cancel_job(win, paint, job) -> tuple[str, bool]:
+def cancel_job(win, paint, job, behind=None) -> tuple[str, bool]:
     """Unregister the job — the one action here whose damage is silence.
 
     Confirmed not because it is hard to undo, but because what follows is
@@ -2788,8 +3425,11 @@ def cancel_job(win, paint, job) -> tuple[str, bool]:
         return f"it is not armed; {chr(PAGE_KEYS[1])} registers it", False
     if not confirm(win, paint, " unregister ", cancel_note()):
         return "still armed", False
+    # Over *behind*, the page the confirm was asked from: the confirm is
+    # taller than the wait, and its edges would stand round it otherwise.
     state, said = waiting(
-        win, paint, " unregister ", "asking Android's scheduler…", sched.do_cancel
+        win, paint, " unregister ", "asking Android's scheduler…", sched.do_cancel,
+        behind,
     )
     if state == "left":
         return "nothing changed", False
@@ -2829,6 +3469,51 @@ def runner_log(win, paint) -> None:
 DEST_KEYS = (ord("v"), ord("a"), ord("f"))
 
 
+def draw_dest(win, paint: dict, said: str, flash: str) -> None:
+    """Lay the destinations page down, without showing it.
+
+    One block per kind under a ``bubbles.section`` rule naming it: the folder
+    in body text, whether it is set and what fills it a step back in grey, and
+    what is wrong with it in red, marked ``×``. Then the said area, in the
+    flash's tone. On plain curses the kind is the bold heading it was.
+    """
+    runner = sched._runner()
+    win.erase()
+    height, width = win.getmaxyx()
+    _title(win, paint, ["where downloads go"])
+    line = 2
+    config = runner.load_config()
+    for kind, where in runner.dests().items():
+        if line >= height - 4:
+            break
+        if LOOK:
+            _put(win, line, 2, bubbles.section(kind, width - 4))
+        else:
+            _addstr(win, line, 2, kind, curses.A_BOLD | paint.get("head", 0))
+        line += 1
+        for text in _wrap(sched._short(where), width - 6, "  "):
+            _say(win, paint, line, 4, text)
+            line += 1
+        note = "set" if config.get(f"{kind}_dir") else "default"
+        _say(
+            win, paint, line, 4, _fit(f"{note}, used by {sched.FILLED_BY[kind]}", width - 6),
+            "90",
+        )
+        line += 1
+        problem = runner.dest_problem(where)
+        if problem:
+            for text in _wrap(f"{CROSS} {problem}", width - 6, "  "):
+                _say(win, paint, line, 4, text, "31")
+                line += 1
+        line += 1
+    for indent, text, tone in said_lines(said, width):
+        if line >= height - 4:
+            break
+        _say(win, paint, line, indent, text, tone)
+        line += 1
+    _foot(win, paint, flash, hint_pairs("dest", width))
+
+
 def dest_screen(win, paint: dict) -> list[str]:
     """Where finished downloads go — every destination, and any one changed.
 
@@ -2853,41 +3538,8 @@ def dest_screen(win, paint: dict) -> list[str]:
     receipts: list[str] = []
     # nomut: start
     while True:
-        win.erase()
-        height, width = win.getmaxyx()
-        _bar(win, paint, " where downloads go ")
-        line = 2
         kinds = list(runner.DEST_KINDS)
-        config = runner.load_config()
-        for kind, where in runner.dests().items():
-            if line >= height - 4:
-                break
-            _addstr(win, line, 2, kind, curses.A_BOLD | paint.get("head", 0))
-            line += 1
-            for text in _wrap(sched._short(where), width - 6, "  "):
-                _addstr(win, line, 4, text)
-                line += 1
-            note = "set" if config.get(f"{kind}_dir") else "default"
-            _addstr(
-                win,
-                line,
-                4,
-                _fit(f"{note}, used by {sched.FILLED_BY[kind]}", width - 6),
-                curses.A_DIM,
-            )
-            line += 1
-            problem = runner.dest_problem(where)
-            if problem:
-                for text in _wrap(f"✗ {problem}", width - 6, "  "):
-                    _addstr(win, line, 4, text, paint.get("31", 0))
-                    line += 1
-            line += 1
-        for indent, text, tone in said_lines(said, width):
-            if line >= height - 4:
-                break
-            _addstr(win, line, indent, text, paint.get(tone, 0))
-            line += 1
-        _foot(win, paint, flash, hint("dest", width))
+        draw_dest(win, paint, said, flash)
         win.refresh()
         key = win.getch()
         if key in (ord("q"), 27, curses.KEY_LEFT):
@@ -3016,7 +3668,7 @@ def settings_lines(
     lines: list[tuple[int, str, str]] = []
     broken = runner.config_problem()
     if broken:
-        lines += [(2, text, "31") for text in _wrap(f"✗ {broken}", width - 4, "  ")]
+        lines += [(2, text, "31") for text in _wrap(f"{CROSS} {broken}", width - 4, "  ")]
     for letter, (name, spec) in zip(
         SETTING_KEYS, runner.SETTINGS.items(), strict=False
     ):
@@ -3039,7 +3691,7 @@ def settings_lines(
             lines += [
                 (5, text, "31")
                 for text in _wrap(
-                    f"✗ config.json says {stored!r}: {problem}", width - 6, "  "
+                    f"{CROSS} config.json says {stored!r}: {problem}", width - 6, "  "
                 )
             ]
     for letter, (name, spellings, label) in zip(
@@ -3129,6 +3781,32 @@ def settings_body(
     return body
 
 
+def draw_settings(win, paint: dict, job, said: str, flash: str) -> None:
+    """Lay the settings page down, without showing it: the loop refreshes.
+
+    :func:`settings_body` as it comes, a line each: a row's letter in the key
+    colour and its name and value in body text, the meanings a step back in
+    grey, a stored value being ignored in red, and the said area in the
+    flash's tone. On plain curses the row is the bold heading it was.
+    """
+    win.erase()
+    height, width = win.getmaxyx()
+    _title(win, paint, ["settings"])
+    line = 2
+    for indent, text, tone in settings_body(width, height, job, said):
+        if line >= height - 4:
+            break
+        if LOOK and tone == "head":
+            _says(win, paint, line, indent, [(text[:1], "head", True), (text[1:], "", True)])
+        else:
+            _say(win, paint, line, indent, text, tone, tone == "head")
+        line += 1
+    # The foot is the hints and nothing else but the screen's own two one-line
+    # refusals: everything a setter or a page said is wrapped in the said area
+    # above, so no sentence is ever both clipped and whole.
+    _foot(win, paint, flash, hint_pairs("settings", width))
+
+
 def settings_screen(win, paint: dict) -> list[str]:
     """What the queue may spend and how early — the settings that change it.
 
@@ -3176,23 +3854,7 @@ def settings_screen(win, paint: dict) -> list[str]:
     job = job if state == "ok" else [("job", f"could not read it: {job}", "1;31")]
     # nomut: start
     while True:
-        win.erase()
-        height, width = win.getmaxyx()
-        _bar(win, paint, " settings ")
-        line = 2
-        body = settings_body(width, height, job, said)
-        for indent, text, tone in body:
-            if line >= height - 4:
-                break
-            attr = paint.get(tone, 0) if tone else 0
-            if tone == "head":
-                attr |= curses.A_BOLD
-            _addstr(win, line, indent, text, attr)
-            line += 1
-        # The foot is the hints and nothing else but the screen's own two
-        # one-line refusals: everything a setter or a page said is wrapped in
-        # the said area above, so no sentence is ever both clipped and whole.
-        _foot(win, paint, flash, hint("settings", width))
+        draw_settings(win, paint, job, said, flash)
         win.refresh()
         key = win.getch()
         if key in (ord("q"), 27, curses.KEY_LEFT):
@@ -3213,8 +3875,13 @@ def settings_screen(win, paint: dict) -> list[str]:
                 # the one that just moved.
                 flash, said = "", got[-1] if got else ""
             else:
+                # The page, for a wait to be drawn over once a confirm has been
+                # drawn over it and answered.
+                page = functools.partial(draw_settings, win, paint, job, said, flash)
                 text, worked = (
-                    cancel_job(win, paint, job) if armed(job) else arm_job(win, paint)
+                    cancel_job(win, paint, job, page)
+                    if armed(job)
+                    else arm_job(win, paint, page)
                 )
                 flash, said = "", text
                 if worked:
@@ -3228,6 +3895,7 @@ def settings_screen(win, paint: dict) -> list[str]:
                         " settings ",
                         "asking Android's scheduler…",
                         sched.job_rows,
+                        page,
                     )
                     job = fresh if state == "ok" else job
             continue
