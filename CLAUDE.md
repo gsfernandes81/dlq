@@ -21,7 +21,11 @@ Decisions that travel with this code — each was arrived at the hard way:
   (`$BEWITCH_HOME`, beside, `~/bewitch`) and the standard library's curses
   where none is. One implementation for both, because `pick_place` runs
   inside ytq's session. `tests/_pty.py` passes `BEWITCH_HOME` to the children
-  with the other siblings.
+  with the other siblings. `bewitch.cursed` lives only on **bewitch's
+  `cursed` branch** (it was taken off bewitch's main as more than a styling
+  library should carry), so this branch wants the bewitch checkout on
+  `cursed`. The owner is having dlq rebuilt on blessed, with on-screen
+  buttons, by other agents; this branch is not to be merged.
 - **Every screen wears bewitch's house style** (2026-10-10, `bewitched`) —
   `bewitch/docs/house-style.md`, which is Crush's look — and **every part of
   it meets the window in one place**, `_put`. A part is a bewitch `Block`
