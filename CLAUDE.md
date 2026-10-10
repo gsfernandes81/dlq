@@ -22,7 +22,43 @@ Decisions that travel with this code — each was arrived at the hard way:
   where none is. One implementation for both, because `pick_place` runs
   inside ytq's session. `tests/_pty.py` passes `BEWITCH_HOME` to the children
   with the other siblings.
-
+- **Every screen wears bewitch's house style** (2026-10-10, `bewitched`) —
+  `bewitch/docs/house-style.md`, which is Crush's look — and **every part of
+  it meets the window in one place**, `_put`. A part is a bewitch `Block`
+  where `LOOK` is true (a bewitch checkout was found: the same answer `curses`
+  is, so `pick_place` and `dlq` cannot come to two looks), composed with
+  `win.draw`; on a window with no `draw` it is written as its plain text; and
+  with no bewitch at all every part draws as it did before, reverse video and
+  dim, so a phone that has not cloned bewitch keeps every screen. The title
+  bars are `bubbles.header`, and the screens are still told apart by their
+  first row (`queue`, `moving …`, the item's slug, `settings`). The group
+  headings and the cut line are `bubbles.section` — `compose_rows` emits them
+  as `Rule`, a `str` whose text is `_section_text`, section's own spelling, so
+  the layout tests go on measuring what is drawn; the cut line is in
+  `primary` and "nothing tonight" in `warning`, because neither may look like
+  the headings either side of it. The cursor row is a `primary` bar on every
+  line of the row, never reverse video; `TONES` carries each tone's theme role
+  beside its curses colour, the greys doing what `A_DIM` did; a row's state
+  gets a mark (`ROW_LOOK`: `×` `✓` `●`) in the column its indent already
+  left. The hints and the legend are `short_help`, so `HINTS`, `TIGHT_HINTS`
+  and `LEGEND_KEYS` are pairs now and `hint()`/`legend()` are the text as
+  drawn — and **every set is measured to fit whole**, because the pair
+  `short_help` gives up when one does not is the last one, the way out.
+  Confirm, ask and every wait are a rounded `bubbles.dialog` **composed over
+  the screen they were asked from**, never instead of it: `confirm_body` gives
+  up blanks and then the last lines of text but never the question or an
+  answer (a confirm with its answers cut off is one where every key means
+  no), ask sits near the top because the keyboard takes the bottom half, and
+  `waiting`'s `behind` lays the page down again under a wait that follows a
+  confirm, or the taller box's edges stand round it. `bubbles.tag` draws the
+  item screen's state word and the verdict's `PAID`/`BLOCKED`, in the columns
+  the plain words took; `bubbles.scrollbar` takes the column the listing and
+  the log already leave empty. Text runs are cut where `_addstr` cut, a
+  column short of the edge, so a path overhangs no further than it did. Two
+  wording changes the layout forced: `✗` is `×` (`glyphs.ERROR`; `✗` was
+  never drawn on the phone), and a dialog title too long for its box keeps
+  what follows its dash — `NOT COUNTED`. `tests/test_look.py` draws every
+  screen onto a canvas that refuses a part past its edge.
 - **`dlq` typed on its own opens the screen** — `default_action`, whose other
   half is the half to keep pinned: with no terminal (a pipe, a script, ssh
   with no tty) it is `status`, which is what a bare `dlq` always printed.
@@ -106,7 +142,7 @@ Decisions that travel with this code — each was arrived at the hard way:
   download's own `.status.json`, read fresh at draw time — so a second apart
   they disagreed and nothing said which was stale. `item_screen` now asks
   once per draw and hands the same reading to `_with_live` (head) and
-  `progress_bar` (foot), and the foot is a bar rather than a second copy of
+  `bar_block` (foot), and the foot is a bar rather than a second copy of
   the numbers. A live line naming a *different* item stays: that is the only
   place that says so. Two rules travel with it: **`where` is the directory,
   not the activity** — an item being downloaded is still in `queue/`, which
@@ -114,8 +150,12 @@ Decisions that travel with this code — each was arrived at the hard way:
   now chosen by `Queue.downloading` while `where` goes on deciding
   everything else; and **an unstated total is never invented**, because
   `_of` prints the declared cap with a `≤` until a server states a size.
-  The bar is `=` against `·` like `quota_widget`'s, never block glyphs —
-  they are East-Asian ambiguous width and a phone may draw them double.
+  The bar is `bubbles.progress_bar` (`bar_block`), `█` against `░`: those
+  were feared East-Asian ambiguous and liable to draw double, and on the
+  phone (2026-10-10) they draw one column each, so the fear is retired. It
+  still stops short of 100% until the last byte is there. The plain-curses
+  fallback keeps `=` against `·` (`progress_bar`), because a terminal with no
+  bewitch behind it is one nobody has checked.
 - **`dlq dump [NAME]` is the bug report** (2026-08-28): environment, sibling
   resolution, gate verdicts, state rows, failing items' heads and the newest
   logs, every section guarded so it finishes on the broken trees it exists
@@ -243,9 +283,10 @@ the failures worth catching there — a page that leaves when it should stay, a
 sentence clipped over the keys, a move that says it happened and renames
 nothing — do not show in a return value. `tests/test_screens.py` and
 `tests/test_settings_screen.py` open the real `dlq ui` on a pty and read it
-back through `pyte`, and assert on the *shape*: which screen is up by its title
-bar, that a row for a download exists, that the legend keys are on the key row,
-that after `m ↓ ⏎` the file on disk has a smaller number than its neighbour.
+back through `pyte`, and assert on the *shape*: which screen is up by its
+header, that a row for a download exists, that the legend keys are on the key
+row, that after `m ↓ ⏎` the file on disk has a smaller number than its
+neighbour.
 `pyte` answers neither `CSI S` nor `CSI T`, which is how ncurses scrolls a
 region to reuse lines, so `tests/_pty.py` teaches it both: without them the
 emulator keeps text a terminal has already scrolled away and the assertions
@@ -282,6 +323,7 @@ One file per guarantee, and each says which:
 | `test_in_flight.py` | the guards that act while the bytes are moving: the byte cap, the floor, the deadline, a portal gone dark |
 | `test_dump.py` | `dlq dump` finishes on the broken trees it exists for |
 | `test_screens.py`, `test_settings_screen.py` | the two screens, on a pty |
+| `test_look.py` | the house style: every screen inside its terminal at every width, the header and the way out on every one, the cursor a bar and never reverse video, dialogs over the screen and never short of an answer, no glyph the phone has not shown — and the same screens with no bewitch |
 
 **`make mutants` is the suite's own check.** poodle changes one operator,
 literal or comparison at a time and runs the tests against it; a mutant that

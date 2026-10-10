@@ -326,7 +326,7 @@ to for the queue as a whole. Reorder, rename, remove, put a failed download
 back, give it its nights back, download one now, open a finished one, read
 its log: there are no commands for any of those — each is easier to do to a
 download you are looking at than to a name you have to type correctly first.
-`n`, `s` and `l` sit on the listing itself, on a dim legend row of their own
+`n`, `s` and `l` sit on the listing itself, on a quiet legend row of their own
 where no download in flight has claimed that line instead: `n` runs the
 whole queue now, `s` opens the window, the reserve, the destinations and the
 nightly job, and `l` opens the runner's own log — see [The queue
@@ -451,7 +451,7 @@ first one is a fact.
 
 ### The queue itself
 
-The listing leads with two lines under the title bar — the verdict, then the
+The listing leads with two lines under the header — the verdict, then the
 figures — the same two facts `dlq status` opens with, kept in view while you
 work the queue instead of a screen away. Inside the queued group, a line
 marks where tonight's spending stops, moving as the items around it move:
